@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+ireps.db
+.claude/scheduled_tasks.lock

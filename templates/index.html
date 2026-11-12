@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IREPS Auction Lot Tracker</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, Arial, sans-serif; max-width: 1200px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.4rem; }
+  h3 { margin-top: 0; }
+  .row { display: flex; gap: 1rem; flex-wrap: wrap; margin: 0.75rem 0; align-items: center; }
+  .row label { font-size: 0.85rem; color: #555; }
+  input[type=text], select { padding: 0.3rem; }
+  button { padding: 0.5rem 1rem; border: 1px solid #333; background: #222; color: #fff; border-radius: 4px; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.secondary { background: #fff; color: #222; }
+  button.star { background: none; border: none; color: #222; font-size: 1.1rem; padding: 0 0.3rem; }
+  #progress { margin: 1rem 0; font-size: 0.9rem; color: #555; }
+  #progressBar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; margin-top: 0.3rem; }
+  #progressFill { height: 100%; background: #2a7; width: 0%; transition: width 0.3s; }
+  table { border-collapse: collapse; width: 100%; margin-top: 1rem; font-size: 0.85rem; }
+  th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }
+  th { background: #f5f5f5; position: sticky; top: 0; }
+  tr:nth-child(even) { background: #fafafa; }
+  #error { color: #b00; white-space: pre-wrap; font-size: 0.85rem; }
+  .muted { color: #888; font-size: 0.85rem; }
+  .section { border: 1px solid #eee; border-radius: 6px; padding: 1rem; margin-bottom: 1.5rem; }
+  .tag { display: inline-block; padding: 0.1rem 0.4rem; border-radius: 3px; font-size: 0.75rem; color: #fff; }
+  .tag-new { background: #2a7; }
+  .tag-updated { background: #d80; }
+  .tag-unchanged { background: #999; }
+  .tag-expired { background: #b00; }
+  .bm-input { width: 90px; }
+</style>
+</head>
+<body>
+  <h1>IREPS Auction Lot Tracker</h1>
+  <p class="muted">Scans the public "Lot Publishing" list on ireps.gov.in (no login), persists every lot seen, and tags changes across scans.</p>
+
+  <div class="section">
+    <h3>Scan</h3>
+    <form id="scanForm">
+      <div class="row">
+        <label>Railway unit code (blank = all)<br><input type="text" name="rail_unit" value=""></label>
+        <label>Depot id (-1 = all)<br><input type="text" name="depot_id" value="-1"></label>
+        <label>Max pages (blank = full scan, ~318 pages / ~8-10 min)<br><input type="text" name="max_pages" value=""></label>
+      </div>
+      <div class="row">
+        <button type="submit" id="scanBtn">Scan all published lots</button>
+      </div>
+    </form>
+    <div id="progress"></div>
+    <div id="progressBar"><div id="progressFill"></div></div>
+    <div id="error"></div>
+  </div>
+
+  <div id="categorySection" class="section"></div>
+
+  <div class="section">
+    <h3>Browse &amp; search scanned lots</h3>
+    <div class="row">
+      <label>Search (comma-separated keywords)<br><input type="text" id="searchBox" placeholder="e.g. copper, cable"></label>
+      <label>Category<br><select id="categoryFilter"><option value="">All</option></select></label>
+      <label>Change<br>
+        <select id="changeTagFilter">
+          <option value="">Any</option>
+          <option value="new">New</option>
+          <option value="updated">Updated</option>
+          <option value="unchanged">Unchanged</option>
+          <option value="expired">Expired</option>
+        </select>
+      </label>
+      <label>Status<br>
+        <select id="statusFilter">
+          <option value="active" selected>Active</option>
+          <option value="expired">Expired</option>
+          <option value="">Any</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="bookmarkedOnly"> Bookmarked only</label>
+      <button type="button" id="searchBtn" class="secondary">Search</button>
+    </div>
+    <div class="row">
+      <button type="button" id="printSelectedBtn" class="secondary">Print selected</button>
+      <a id="downloadCsvLink" href="/download.csv"><button type="button" class="secondary">Download CSV (current filter)</button></a>
+    </div>
+    <div id="lotsSection"></div>
+  </div>
+
+  <div class="section">
+    <h3>Bookmarks</h3>
+    <div id="bookmarksSection"></div>
+  </div>
+
+<script>
+function escapeHtml(s) {
+  return (s == null ? "" : String(s)).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function currentFilters() {
+  return {
+    search: document.getElementById("searchBox").value.trim(),
+    category: document.getElementById("categoryFilter").value,
+    change_tag: document.getElementById("changeTagFilter").value,
+    status: document.getElementById("statusFilter").value,
+    bookmarked_only: document.getElementById("bookmarkedOnly").checked ? "1" : "",
+  };
+}
+
+function filtersToQuery(filters) {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(filters)) {
+    if (v) params.set(k, v);
+  }
+  return params.toString();
+}
+
+function refreshCategoryFilterOptions(counts) {
+  const sel = document.getElementById("categoryFilter");
+  const prev = sel.value;
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  sel.innerHTML = '<option value="">All</option>' + entries.map(
+    ([cat, n]) => `<option value="${escapeHtml(cat)}">${escapeHtml(cat)} (${n})</option>`
+  ).join("");
+  sel.value = prev;
+}
+
+function renderCategoryBreakdown(counts) {
+  const section = document.getElementById("categorySection");
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) {
+    section.innerHTML = "<h3>Lots by category</h3><p class='muted'>No scans yet.</p>";
+    return;
+  }
+  const total = entries.reduce((sum, [, n]) => sum + n, 0);
+  let html = `<h3>Lots by category (${total} active)</h3><table><tr><th>Category</th><th>Count</th></tr>`;
+  for (const [category, count] of entries) {
+    html += `<tr><td>${escapeHtml(category)}</td><td>${count}</td></tr>`;
+  }
+  html += "</table>";
+  section.innerHTML = html;
+}
+
+function loadCategoryCounts() {
+  fetch("/category_counts").then(r => r.json()).then(counts => {
+    renderCategoryBreakdown(counts);
+    refreshCategoryFilterOptions(counts);
+  });
+}
+
+function viewDetails(lotId) {
+  const row = document.getElementById("detailRow-" + lotId);
+  if (row.style.display !== "none") {
+    row.style.display = "none";
+    return;
+  }
+  row.style.display = "";
+  const cell = document.getElementById("detailCell-" + lotId);
+  if (cell.dataset.loaded) return;
+  cell.textContent = "Loading...";
+  fetch("/lot_detail/" + encodeURIComponent(lotId)).then(r => r.json()).then(data => {
+    if (data.error) {
+      cell.textContent = "Could not load details: " + data.error;
+      return;
+    }
+    let html = "<table>";
+    for (const [label, value] of Object.entries(data)) {
+      html += `<tr><td style="font-weight:bold;width:220px;">${escapeHtml(label)}</td><td>${escapeHtml(value)}</td></tr>`;
+    }
+    html += "</table>";
+    cell.innerHTML = html;
+    cell.dataset.loaded = "1";
+  }).catch(err => { cell.textContent = "Could not load details: " + err; });
+}
+
+function toggleBookmark(lotNo, btn) {
+  fetch("/bookmark/" + encodeURIComponent(lotNo), { method: "POST" }).then(r => r.json()).then(data => {
+    btn.textContent = data.bookmarked ? "★" : "☆";
+    btn.dataset.bookmarked = data.bookmarked ? "1" : "";
+    loadBookmarks();
+  });
+}
+
+function removeBookmark(lotNo) {
+  // Bookmarks section rows are only ever shown while bookmarked, so this
+  // toggle call always removes it.
+  fetch("/bookmark/" + encodeURIComponent(lotNo), { method: "POST" }).then(() => {
+    loadBookmarks();
+    loadLots();
+  });
+}
+
+function renderLots(rows) {
+  const section = document.getElementById("lotsSection");
+  if (!rows || rows.length === 0) {
+    section.innerHTML = "<p class='muted'>No lots match the current filters.</p>";
+    return;
+  }
+  let html = `<p class="muted">${rows.length} lot(s)</p><table><tr>
+    <th></th><th></th><th>Railway</th><th>Depot</th><th>Location</th><th>Lot No</th><th>Qty/Unit</th>
+    <th>Category</th><th>Min Incr</th><th>Material Descr.</th><th>Publish Date</th>
+    <th>Next Auction</th><th>Change</th><th></th><th></th></tr>`;
+  for (const row of rows) {
+    const lotId = row.lot_id || "";
+    const star = row.is_bookmarked ? "★" : "☆";
+    html += `<tr>
+      <td><input type="checkbox" class="lotCheckbox" value="${escapeHtml(row.lot_no)}"></td>
+      <td><button type="button" class="star" data-bookmarked="${row.is_bookmarked ? '1' : ''}" onclick="toggleBookmark('${escapeHtml(row.lot_no)}', this)">${star}</button></td>
+      <td>${escapeHtml(row.railway)}</td>
+      <td>${escapeHtml(row.depot)}</td>
+      <td>${escapeHtml(row.location)}</td>
+      <td>${escapeHtml(row.lot_no)}</td>
+      <td>${escapeHtml(row.qty_unit)}</td>
+      <td>${escapeHtml(row.category)}</td>
+      <td>${escapeHtml(row.min_incr)}</td>
+      <td>${escapeHtml(row.material_descr)}</td>
+      <td>${escapeHtml(row.publish_date)}</td>
+      <td>${escapeHtml(row.next_auction)}</td>
+      <td><span class="tag tag-${escapeHtml(row.change_tag)}">${escapeHtml(row.change_tag)}</span></td>
+      <td>${lotId ? `<button type="button" class="secondary" onclick="viewDetails('${lotId}')">Details</button>` : ""}</td>
+      <td>${lotId ? `<a href="/download_catalogue/${lotId}"><button type="button" class="secondary">Catalogue</button></a>` : ""}</td>
+    </tr>`;
+    if (lotId) {
+      html += `<tr id="detailRow-${lotId}" style="display:none;"><td colspan="15" id="detailCell-${lotId}"></td></tr>`;
+    }
+  }
+  html += "</table>";
+  section.innerHTML = html;
+}
+
+function loadLots() {
+  const qs = filtersToQuery(currentFilters());
+  document.getElementById("downloadCsvLink").href = "/download.csv" + (qs ? "?" + qs : "");
+  fetch("/lots" + (qs ? "?" + qs : "")).then(r => r.json()).then(renderLots);
+}
+
+function printSelected() {
+  const checked = Array.from(document.querySelectorAll(".lotCheckbox:checked")).map(cb => cb.value);
+  if (checked.length === 0) {
+    alert("Select at least one lot first.");
+    return;
+  }
+  window.open("/print?lot_nos=" + encodeURIComponent(checked.join(",")), "_blank");
+}
+
+function saveBookmark(lotNo, row) {
+  const form = new URLSearchParams();
+  form.set("notes", row.querySelector(".bm-notes").value);
+  form.set("target_rate", row.querySelector(".bm-target").value);
+  form.set("secured_rate", row.querySelector(".bm-secured").value);
+  form.set("sold_rate", row.querySelector(".bm-sold").value);
+  form.set("expenses", row.querySelector(".bm-expenses").value);
+  fetch("/bookmark/" + encodeURIComponent(lotNo) + "/update", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+  }).then(() => {
+    row.querySelector(".bm-status").textContent = "Saved";
+    setTimeout(() => { row.querySelector(".bm-status").textContent = ""; }, 1500);
+  });
+}
+
+function renderBookmarks(rows) {
+  const section = document.getElementById("bookmarksSection");
+  if (!rows || rows.length === 0) {
+    section.innerHTML = "<p class='muted'>No bookmarked lots yet. Click the star next to a lot above to bookmark it.</p>";
+    return;
+  }
+  let html = `<table><tr>
+    <th>Lot No</th><th>Status</th><th>Location</th><th>Material Descr.</th><th>Next Auction</th>
+    <th>Notes</th><th>Target rate</th><th>Secured rate</th><th>Sold rate</th><th>Expenses</th><th></th></tr>`;
+  for (const row of rows) {
+    html += `<tr data-lot-no="${escapeHtml(row.lot_no)}">
+      <td>${escapeHtml(row.lot_no)}</td>
+      <td><span class="tag tag-${escapeHtml(row.change_tag)}">${escapeHtml(row.change_tag)}</span> ${escapeHtml(row.status)}</td>
+      <td>${escapeHtml(row.location)}</td>
+      <td>${escapeHtml(row.material_descr)}</td>
+      <td>${escapeHtml(row.next_auction)}</td>
+      <td><input class="bm-input bm-notes" style="width:160px" type="text" value="${escapeHtml(row.notes)}"></td>
+      <td><input class="bm-input bm-target" type="text" value="${escapeHtml(row.target_rate)}"></td>
+      <td><input class="bm-input bm-secured" type="text" value="${escapeHtml(row.secured_rate)}"></td>
+      <td><input class="bm-input bm-sold" type="text" value="${escapeHtml(row.sold_rate)}"></td>
+      <td><input class="bm-input bm-expenses" type="text" value="${escapeHtml(row.expenses)}"></td>
+      <td>
+        <button type="button" class="secondary save-bm-btn">Save</button>
+        <button type="button" class="secondary remove-bm-btn">Remove</button>
+        <span class="bm-status muted"></span>
+      </td>
+    </tr>`;
+  }
+  html += "</table>";
+  section.innerHTML = html;
+  section.querySelectorAll(".save-bm-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const tr = btn.closest("tr");
+      saveBookmark(tr.dataset.lotNo, tr);
+    });
+  });
+  section.querySelectorAll(".remove-bm-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const tr = btn.closest("tr");
+      removeBookmark(tr.dataset.lotNo);
+    });
+  });
+}
+
+function loadBookmarks() {
+  fetch("/bookmarks").then(r => r.json()).then(renderBookmarks);
+}
+
+let pollTimer = null;
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function startPolling() {
+  poll();
+  stopPolling();
+  pollTimer = setInterval(poll, 2000);
+}
+
+function poll() {
+  fetch("/status").then(r => r.json()).then(data => {
+    const btn = document.getElementById("scanBtn");
+    const progress = document.getElementById("progress");
+    const fill = document.getElementById("progressFill");
+    const errorEl = document.getElementById("error");
+
+    if (data.status === "running") {
+      btn.disabled = true;
+      btn.textContent = "Scanning...";
+      const pct = data.est_total_pages ? Math.min(100, Math.round(100 * data.page_no / data.est_total_pages)) : 0;
+      progress.textContent = `Page ${data.page_no} of ~${data.est_total_pages} | ${data.rows_seen} of ${data.total_results} lots scanned`;
+      fill.style.width = pct + "%";
+      errorEl.textContent = "";
+    } else {
+      btn.disabled = false;
+      btn.textContent = "Scan all published lots";
+      if (data.status === "done") {
+        const s = data.scan_summary || {};
+        progress.textContent = `Done: ${s.total_lots || 0} lots scanned (${s.new_count || 0} new, ` +
+          `${s.updated_count || 0} updated, ${s.expired_count || 0} expired). Finished ${data.finished_at}.`;
+        fill.style.width = "100%";
+        errorEl.textContent = "";
+        loadCategoryCounts();
+        loadLots();
+      } else if (data.status === "error") {
+        progress.textContent = "Scan failed.";
+        errorEl.textContent = data.error;
+      } else {
+        progress.textContent = "";
+      }
+    }
+    if (data.status !== "running") stopPolling();
+  });
+}
+
+document.getElementById("scanForm").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const form = ev.target;
+  const body = new URLSearchParams(new FormData(form));
+  document.getElementById("scanBtn").disabled = true;
+  document.getElementById("scanBtn").textContent = "Starting...";
+  fetch("/scan", { method: "POST", body }).then(() => startPolling());
+});
+
+document.getElementById("searchBtn").addEventListener("click", loadLots);
+document.getElementById("printSelectedBtn").addEventListener("click", printSelected);
+["searchBox"].forEach(id => {
+  document.getElementById(id).addEventListener("keydown", e => { if (e.key === "Enter") loadLots(); });
+});
+["categoryFilter", "changeTagFilter", "statusFilter", "bookmarkedOnly"].forEach(id => {
+  document.getElementById(id).addEventListener("change", loadLots);
+});
+
+loadCategoryCounts();
+loadLots();
+loadBookmarks();
+startPolling();
+</script>
+</body>
+</html>
