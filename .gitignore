@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 ireps.db
 .claude/scheduled_tasks.lock
+.env.local
+web/node_modules/
+web/dist/
