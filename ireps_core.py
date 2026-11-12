@@ -1,11 +1,11 @@
 """Shared scraping logic for the IREPS lot-publishing tool.
 
 Pulls the public "Lot Publishing Module" list (no login required) from
-ireps.gov.in. Used by both the CLI (ireps_filter.py) and the web dashboard
-(webapp.py).
+ireps.gov.in. Used by autoscan.py (the daily Supabase-syncing scan).
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 from typing import Iterator
@@ -32,6 +32,15 @@ BASE_FIELDS = [
 ]
 # next_auction/lot_id are enriched in after the base row scrape (see scan()).
 FIELDS = BASE_FIELDS + ["next_auction", "lot_id"]
+
+# Fields whose change should flip a lot's change_tag to 'updated' (see
+# content_hash() / autoscan.py's diffing against the existing Supabase rows).
+TRACKED_FIELDS = ["qty_unit", "category", "min_incr", "material_descr", "publish_date", "next_auction"]
+
+
+def content_hash(row: dict) -> str:
+    raw = "|".join(str(row.get(f, "")) for f in TRACKED_FIELDS)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
 def fetch_page(session: requests.Session, page_no: int, rail_unit_name: str, depot_id: str) -> str:

@@ -2,12 +2,6 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "ireps-webapp",
-      "runtimeExecutable": ".venv/bin/python",
-      "runtimeArgs": ["webapp.py"],
-      "port": 5050
-    },
-    {
       "name": "ireps-web",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
