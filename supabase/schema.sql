@@ -144,3 +144,50 @@ create policy "users manage their own external lots"
   on external_lots for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- Phase 6: awarded_lots -- lots you actually won, carried from auction
+-- through payment and delivery. Self-contained (not FK'd to lots/bookmarks/
+-- external_lots) since a win can come from any of those sources, or be
+-- entered directly. Scoped to the signed-in user via RLS.
+create table if not exists awarded_lots (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  source text not null default 'IREPS',
+  lot_no text,
+  title text not null,
+  location text,
+  category text,
+  qty_unit text,
+  sold_rate text,
+  awarded_date date,
+  status text not null default 'awarded',
+  payment_due_date date,
+  payment_status text not null default 'pending',
+  amount_paid text,
+  delivery_due_date date,
+  qty_lifted text,
+  qty_balance text,
+  expenses text,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+alter table awarded_lots enable row level security;
+
+create policy "users manage their own awarded lots"
+  on awarded_lots for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- Document uploads for awarded lots (contracts, delivery challans, payment
+-- receipts, ...). Private bucket; objects are stored under
+-- "<user_id>/<award_id>/<filename>" so the RLS policy below can scope
+-- access per user by the first path segment.
+insert into storage.buckets (id, name, public)
+values ('award-documents', 'award-documents', false)
+on conflict (id) do nothing;
+
+create policy "users manage their own award documents"
+  on storage.objects for all
+  using (bucket_id = 'award-documents' and (storage.foldername(name))[1] = auth.uid()::text)
+  with check (bucket_id = 'award-documents' and (storage.foldername(name))[1] = auth.uid()::text);

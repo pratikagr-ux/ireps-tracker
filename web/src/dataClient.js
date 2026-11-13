@@ -171,3 +171,65 @@ export async function removeExternalLot(id) {
   const { error } = await supabase.from('external_lots').delete().eq('id', id);
   if (error) throw error;
 }
+
+// ── Awarded lots (per signed-in user) ───────────────────────────────────
+export async function fetchAwardedLots() {
+  const { data, error } = await supabase.from('awarded_lots').select('*').order('created_at', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addAwardedLot(fields) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (!userId) throw new Error('Not signed in');
+  const { data, error } = await supabase.from('awarded_lots').insert({ user_id: userId, ...fields }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateAwardedLot(id, fields) {
+  const { error } = await supabase.from('awarded_lots').update(fields).eq('id', id);
+  if (error) throw error;
+}
+
+export async function removeAwardedLot(id) {
+  const { error } = await supabase.from('awarded_lots').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// ── Award documents (Supabase Storage, private bucket) ──────────────────
+export async function listAwardDocuments(awardId) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (!userId) throw new Error('Not signed in');
+  const { data, error } = await supabase.storage.from('award-documents').list(`${userId}/${awardId}`);
+  if (error) throw error;
+  return (data || []).filter(f => f.name !== '.emptyFolderPlaceholder');
+}
+
+export async function uploadAwardDocument(awardId, file) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (!userId) throw new Error('Not signed in');
+  const path = `${userId}/${awardId}/${Date.now()}-${file.name}`;
+  const { error } = await supabase.storage.from('award-documents').upload(path, file);
+  if (error) throw error;
+}
+
+export async function getAwardDocumentUrl(awardId, filename) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (!userId) throw new Error('Not signed in');
+  const { data, error } = await supabase.storage.from('award-documents').createSignedUrl(`${userId}/${awardId}/${filename}`, 60);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+export async function deleteAwardDocument(awardId, filename) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (!userId) throw new Error('Not signed in');
+  const { error } = await supabase.storage.from('award-documents').remove([`${userId}/${awardId}/${filename}`]);
+  if (error) throw error;
+}

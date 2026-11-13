@@ -30,6 +30,10 @@ const WATCH_STATUSES = ['watching', 'shortlisted', 'inspected', 'participating',
 const WATCH_STATUS_COLOR = { watching: C.sub, shortlisted: C.blue, inspected: C.amber, participating: C.amber, won: C.green, lost: C.red };
 const INSPECTION_STATUSES = ['pending', 'scheduled', 'done', 'skipped'];
 const EXTERNAL_SOURCES = ['MSTC', 'MJunction', 'Other'];
+const AWARD_SOURCES = ['IREPS', 'MSTC', 'MJunction', 'Other'];
+const AWARD_STATUSES = ['awarded', 'payment_pending', 'payment_done', 'lifting', 'completed', 'cancelled'];
+const AWARD_STATUS_COLOR = { awarded: C.blue, payment_pending: C.amber, payment_done: C.blue, lifting: C.amber, completed: C.green, cancelled: C.red };
+const PAYMENT_STATUSES = ['pending', 'partial', 'paid'];
 
 function parseNum(v) {
   const n = parseFloat(v);
@@ -595,6 +599,240 @@ function ExternalLotModal({ row, onSave, onClose }) {
   );
 }
 
+function AwardDocuments({ awardId }) {
+  const [docs, setDocs] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = useCallback(async () => {
+    try {
+      setDocs(await DB.listAwardDocuments(awardId));
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  }, [awardId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const onUpload = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    setBusy(true); setErr('');
+    try {
+      await DB.uploadAwardDocument(awardId, file);
+      await load();
+    } catch (ex) {
+      setErr(ex.message || String(ex));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const open = async (name) => {
+    try {
+      const url = await DB.getAwardDocumentUrl(awardId, name);
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  };
+
+  const del = async (name) => {
+    try {
+      await DB.deleteAwardDocument(awardId, name);
+      await load();
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  };
+
+  return (
+    <div>
+      {err && <div style={{ fontSize: 12, color: C.red, marginBottom: 8 }}>{err}</div>}
+      {docs.map(d => (
+        <div key={d.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderTop: `1px solid ${C.bdr}`, fontSize: 12.5 }}>
+          <button onClick={() => open(d.name)} style={{ background: 'none', border: 'none', color: C.blue, cursor: 'pointer', padding: 0, textAlign: 'left' }}>
+            {d.name.replace(/^\d+-/, '')}
+          </button>
+          <button onClick={() => del(d.name)} style={{ background: 'none', border: 'none', color: C.red, cursor: 'pointer', fontSize: 11 }}>Delete</button>
+        </div>
+      ))}
+      {!docs.length && <div style={{ fontSize: 12, color: C.sub, padding: '5px 0' }}>No documents uploaded yet.</div>}
+      <input type="file" onChange={onUpload} disabled={busy} style={{ fontSize: 12, marginTop: 8 }} />
+    </div>
+  );
+}
+
+function AwardedLotModal({ row, onSave, onClose }) {
+  const isNew = !row?.id;
+  const [f, setF] = useState({
+    source: row?.source || 'IREPS',
+    lot_no: row?.lot_no || '',
+    title: row?.title || '',
+    location: row?.location || '',
+    category: row?.category || '',
+    qty_unit: row?.qty_unit || '',
+    sold_rate: row?.sold_rate || '',
+    awarded_date: row?.awarded_date || '',
+    status: row?.status || 'awarded',
+    payment_due_date: row?.payment_due_date || '',
+    payment_status: row?.payment_status || 'pending',
+    amount_paid: row?.amount_paid || '',
+    delivery_due_date: row?.delivery_due_date || '',
+    qty_lifted: row?.qty_lifted || '',
+    qty_balance: row?.qty_balance || '',
+    expenses: row?.expenses || '',
+    notes: row?.notes || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const [saved, setSaved] = useState(row?.id ? row : null);
+  const set = (k) => (e) => setF(prev => ({ ...prev, [k]: e.target.value }));
+
+  const save = async () => {
+    if (!f.title.trim()) { setErr('Title is required'); return; }
+    setSaving(true);
+    try {
+      const fields = {
+        ...f,
+        awarded_date: f.awarded_date || null,
+        payment_due_date: f.payment_due_date || null,
+        delivery_due_date: f.delivery_due_date || null,
+      };
+      const result = await onSave(fields, saved?.id);
+      if (!saved && result) setSaved(result);
+      setSaving(false);
+    } catch (e) {
+      setErr(e.message || String(e));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 560, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{isNew ? 'Add Awarded Lot' : 'Edit Awarded Lot'}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
+        </div>
+
+        {err && <div style={{ fontSize: 12, color: C.red, marginBottom: 12 }}>{err}</div>}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={field}>
+            <span style={label}>Source</span>
+            <select value={f.source} onChange={set('source')} style={modalInput}>
+              {AWARD_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label style={field}>
+            <span style={label}>Lot No</span>
+            <input value={f.lot_no} onChange={set('lot_no')} style={modalInput} />
+          </label>
+        </div>
+        <label style={{ ...field, marginBottom: 12 }}>
+          <span style={label}>Title / material description</span>
+          <input value={f.title} onChange={set('title')} style={modalInput} placeholder="Required" />
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={field}>
+            <span style={label}>Location</span>
+            <input value={f.location} onChange={set('location')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Category</span>
+            <input value={f.category} onChange={set('category')} style={modalInput} />
+          </label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+          <label style={field}>
+            <span style={label}>Qty / Unit</span>
+            <input value={f.qty_unit} onChange={set('qty_unit')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Sold rate</span>
+            <input value={f.sold_rate} onChange={set('sold_rate')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Awarded date</span>
+            <input type="date" value={f.awarded_date || ''} onChange={set('awarded_date')} style={modalInput} />
+          </label>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Status</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12, marginBottom: 14 }}>
+          <label style={field}>
+            <span style={label}>Overall status</span>
+            <select value={f.status} onChange={set('status')} style={modalInput}>
+              {AWARD_STATUSES.map(s => <option key={s} value={s}>{s.replace('_', ' ')}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Payment</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <label style={field}>
+            <span style={label}>Due date</span>
+            <input type="date" value={f.payment_due_date || ''} onChange={set('payment_due_date')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Status</span>
+            <select value={f.payment_status} onChange={set('payment_status')} style={modalInput}>
+              {PAYMENT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label style={field}>
+            <span style={label}>Amount paid</span>
+            <input value={f.amount_paid} onChange={set('amount_paid')} style={modalInput} />
+          </label>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Delivery &amp; lifting</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <label style={field}>
+            <span style={label}>Delivery due</span>
+            <input type="date" value={f.delivery_due_date || ''} onChange={set('delivery_due_date')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Qty lifted</span>
+            <input value={f.qty_lifted} onChange={set('qty_lifted')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Qty balance</span>
+            <input value={f.qty_balance} onChange={set('qty_balance')} style={modalInput} />
+          </label>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <label style={field}>
+            <span style={label}>Expenses</span>
+            <input value={f.expenses} onChange={set('expenses')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Notes</span>
+            <input value={f.notes} onChange={set('notes')} style={modalInput} />
+          </label>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Documents</div>
+        {saved?.id ? (
+          <div style={{ marginBottom: 16 }}><AwardDocuments awardId={saved.id} /></div>
+        ) : (
+          <div style={{ fontSize: 12, color: C.sub, marginBottom: 16 }}>Save this award first to attach documents.</div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={save} disabled={saving} style={{ ...smallBtn, background: C.blue, color: '#fff', borderColor: C.blue }}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button onClick={onClose} style={smallBtn}>{saved ? 'Close' : 'Cancel'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main app ─────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
@@ -617,6 +855,8 @@ export default function App() {
   const [editWatchRow, setEditWatchRow] = useState(null);
   const [externalLots, setExternalLots] = useState([]);
   const [editExternalLot, setEditExternalLot] = useState(undefined); // undefined = modal closed, null = new
+  const [awardedLots, setAwardedLots] = useState([]);
+  const [editAward, setEditAward] = useState(undefined); // undefined = modal closed, null = new
 
   // Watchlisted IREPS lots + manually-tracked external lots, grouped by
   // category and ranked by landing cost within each group, so the cheapest
@@ -693,15 +933,25 @@ export default function App() {
     }
   }, []);
 
+  const loadAwardedLots = useCallback(async () => {
+    try {
+      const rows = await DB.fetchAwardedLots();
+      setAwardedLots(rows);
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  }, []);
+
   useEffect(() => {
     if (session) {
       loadLots();
       loadBookmarks();
       loadKeywords();
       loadExternalLots();
+      loadAwardedLots();
       DB.fetchLatestScan().then(setLatestScan).catch(() => {});
     }
-  }, [session, loadLots, loadBookmarks, loadKeywords, loadExternalLots]);
+  }, [session, loadLots, loadBookmarks, loadKeywords, loadExternalLots, loadAwardedLots]);
 
   useEffect(() => {
     if (!session || !keywords.length) { setKeywordMatches([]); return; }
@@ -752,6 +1002,23 @@ export default function App() {
     try {
       await DB.removeExternalLot(id);
       await loadExternalLots();
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  };
+
+  const saveAward = async (fields, id) => {
+    let result = null;
+    if (id) await DB.updateAwardedLot(id, fields);
+    else result = await DB.addAwardedLot(fields);
+    await loadAwardedLots();
+    return result;
+  };
+
+  const removeAward = async (id) => {
+    try {
+      await DB.removeAwardedLot(id);
+      await loadAwardedLots();
     } catch (e) {
       setErr(e.message || String(e));
     }
@@ -911,7 +1178,8 @@ export default function App() {
             </thead>
             <tbody>
               {bookmarks.map(row => (
-                <WatchlistRow key={row.lot_no} row={row} onRemove={() => toggleBookmark(row.lot_no)} onDetails={() => setDetailLot(row)} onEdit={() => setEditWatchRow(row)} />
+                <WatchlistRow key={row.lot_no} row={row} onRemove={() => toggleBookmark(row.lot_no)} onDetails={() => setDetailLot(row)} onEdit={() => setEditWatchRow(row)}
+                  onAward={() => setEditAward({ source: 'IREPS', lot_no: row.lot_no, title: row.material_descr, location: row.location, category: row.category, qty_unit: row.qty_unit, sold_rate: row.sold_rate })} />
               ))}
               {!bookmarks.length && <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: C.sub }}>Nothing on your watchlist yet — star a lot above.</td></tr>}
             </tbody>
@@ -933,7 +1201,8 @@ export default function App() {
             </thead>
             <tbody>
               {externalLots.map(row => (
-                <ExternalLotRow key={row.id} row={row} onRemove={() => removeExternalLot(row.id)} onEdit={() => setEditExternalLot(row)} />
+                <ExternalLotRow key={row.id} row={row} onRemove={() => removeExternalLot(row.id)} onEdit={() => setEditExternalLot(row)}
+                  onAward={() => setEditAward({ source: row.source, lot_no: row.external_lot_no, title: row.title, location: row.location, category: row.category, qty_unit: row.qty_unit, sold_rate: row.sold_rate })} />
               ))}
               {!externalLots.length && <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: C.sub }}>Nothing tracked from MSTC/MJunction/other sites yet.</td></tr>}
             </tbody>
@@ -972,15 +1241,55 @@ export default function App() {
             </div>
           </>
         )}
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '26px 0 10px' }}>
+          <h2 style={{ fontSize: 15, margin: 0 }}>Awarded Lots ({awardedLots.length})</h2>
+          <button onClick={() => setEditAward(null)} style={smallBtn}>Add Awarded Lot</button>
+        </div>
+        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: '#fafafa', textAlign: 'left' }}>
+                <th style={th}>Source</th><th style={th}>Lot No</th><th style={th}>Title</th>
+                <th style={th}>Status</th><th style={th}>Payment</th><th style={th}>Qty Lifted / Balance</th>
+                <th style={th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {awardedLots.map(row => (
+                <AwardedLotRow key={row.id} row={row} onRemove={() => removeAward(row.id)} onEdit={() => setEditAward(row)} />
+              ))}
+              {!awardedLots.length && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: C.sub }}>No lots awarded yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
       </div>
       {detailLot && <LotDetailModal row={detailLot} onClose={() => setDetailLot(null)} />}
       {editWatchRow && <WatchlistEditModal row={editWatchRow} onSave={saveBookmark} onClose={() => setEditWatchRow(null)} />}
       {editExternalLot !== undefined && <ExternalLotModal row={editExternalLot} onSave={saveExternalLot} onClose={() => setEditExternalLot(undefined)} />}
+      {editAward !== undefined && <AwardedLotModal row={editAward} onSave={saveAward} onClose={() => setEditAward(undefined)} />}
     </div>
   );
 }
 
-function ExternalLotRow({ row, onRemove, onEdit }) {
+function AwardedLotRow({ row, onRemove, onEdit }) {
+  return (
+    <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
+      <td style={td}>{row.source}</td>
+      <td style={td}>{row.lot_no || '-'}</td>
+      <td style={{ ...td, maxWidth: 240 }}>{row.title}</td>
+      <td style={td}><Badge text={row.status.replace('_', ' ')} color={AWARD_STATUS_COLOR[row.status] || C.sub} /></td>
+      <td style={td}>{row.payment_status}{row.amount_paid ? ` · ${row.amount_paid}` : ''}</td>
+      <td style={td}>{row.qty_lifted || '-'} / {row.qty_balance || '-'}</td>
+      <td style={td}>
+        <button onClick={onEdit} style={smallBtn}>Edit</button>{' '}
+        <button onClick={onRemove} style={{ ...smallBtn, color: C.red }}>Remove</button>
+      </td>
+    </tr>
+  );
+}
+
+function ExternalLotRow({ row, onRemove, onEdit, onAward }) {
   const cost = landingCost(row);
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
@@ -997,13 +1306,16 @@ function ExternalLotRow({ row, onRemove, onEdit }) {
       <td style={td}>{cost === null ? '-' : cost.toFixed(2)}</td>
       <td style={td}>
         <button onClick={onEdit} style={smallBtn}>Edit</button>{' '}
+        {row.watch_status === 'won' && <>
+          <button onClick={onAward} style={{ ...smallBtn, color: C.green, borderColor: C.green }}>Mark Awarded</button>{' '}
+        </>}
         <button onClick={onRemove} style={{ ...smallBtn, color: C.red }}>Remove</button>
       </td>
     </tr>
   );
 }
 
-function WatchlistRow({ row, onRemove, onDetails, onEdit }) {
+function WatchlistRow({ row, onRemove, onDetails, onEdit, onAward }) {
   const cost = landingCost(row);
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
@@ -1017,6 +1329,9 @@ function WatchlistRow({ row, onRemove, onDetails, onEdit }) {
       <td style={td}>
         <button onClick={onEdit} style={smallBtn}>Edit</button>{' '}
         <button onClick={onDetails} style={smallBtn}>Details</button>{' '}
+        {row.watch_status === 'won' && <>
+          <button onClick={onAward} style={{ ...smallBtn, color: C.green, borderColor: C.green }}>Mark Awarded</button>{' '}
+        </>}
         <button onClick={onRemove} style={{ ...smallBtn, color: C.red }}>Remove</button>
       </td>
     </tr>
