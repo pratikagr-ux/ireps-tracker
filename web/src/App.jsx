@@ -12,6 +12,7 @@ import { supabase } from './supabaseClient.js';
 import * as DB from './dataClient.js';
 import { describeLocation } from './codes.js';
 import { daysToAuction, formatDaysTo } from './dates.js';
+import './App.css';
 
 const IREPS_LOT_URL = (lotId) => `https://ireps.gov.in/eps/auction/viewLotAnon.do?lotId=${encodeURIComponent(lotId)}`;
 
@@ -82,8 +83,8 @@ function LoginScreen({ onSignedIn }) {
   };
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: C.bg }}>
-      <form onSubmit={submit} style={{ width: 340, background: C.surf, borderRadius: 12, border: `1px solid ${C.bdr}`, padding: 28, boxShadow: '0 4px 20px rgba(0,0,0,0.06)' }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: C.bg, padding: 16, boxSizing: 'border-box' }}>
+      <form onSubmit={submit} style={{ width: 'min(340px, 100%)', background: C.surf, borderRadius: 12, border: `1px solid ${C.bdr}`, padding: 28, boxShadow: '0 4px 20px rgba(0,0,0,0.06)', boxSizing: 'border-box' }}>
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
           <div style={{ fontSize: 32, marginBottom: 8 }}>🚂</div>
           <div style={{ fontSize: 15, fontWeight: 700, color: C.txt }}>IREPS Tracker</div>
@@ -228,7 +229,7 @@ function LotDetailModal({ row, onClose }) {
   const detailRows = Object.entries(row.detail || {});
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 560, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 'min(560px, 94vw)', maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 4 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>Lot {row.lot_no}</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
@@ -309,14 +310,14 @@ function WatchlistEditModal({ row, onSave, onClose }) {
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 560, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 'min(560px, 94vw)', maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 4 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>Watchlist · Lot {row.lot_no}</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
         </div>
         <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 16 }}>{row.material_descr}</div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 14 }}>
           <label style={field}>
             <span style={label}>Status</span>
             <select value={f.watch_status} onChange={set('watch_status')} style={modalInput}>
@@ -335,7 +336,7 @@ function WatchlistEditModal({ row, onSave, onClose }) {
         </label>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Inspection</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 14 }}>
           <label style={field}>
             <span style={label}>Status</span>
             <select value={f.inspection_status} onChange={set('inspection_status')} style={modalInput}>
@@ -349,7 +350,7 @@ function WatchlistEditModal({ row, onSave, onClose }) {
         </div>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>EMD</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 12, alignItems: 'end', marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 12, alignItems: 'end', marginBottom: 14 }}>
           <label style={{ ...field, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <input type="checkbox" checked={f.emd_required} onChange={set('emd_required')} />
             <span style={label}>Required</span>
@@ -365,7 +366,7 @@ function WatchlistEditModal({ row, onSave, onClose }) {
         </div>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Rates &amp; landing cost</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 6 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 6 }}>
           <label style={field}>
             <span style={label}>Target rate</span>
             <input value={f.target_rate} onChange={set('target_rate')} style={modalInput} />
@@ -384,7 +385,7 @@ function WatchlistEditModal({ row, onSave, onClose }) {
         </div>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Auction-day log</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 18 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 18 }}>
           <label style={field}>
             <span style={label}>Last bid</span>
             <input value={f.last_bid} onChange={set('last_bid')} style={modalInput} />
@@ -457,7 +458,7 @@ function ExternalLotModal({ row, onSave, onClose }) {
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 560, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 'min(560px, 94vw)', maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>{isNew ? 'Add External Lot' : 'Edit External Lot'}</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
@@ -466,7 +467,7 @@ function ExternalLotModal({ row, onSave, onClose }) {
         {err && <div style={{ fontSize: 12, color: C.red, marginBottom: 12 }}>{err}</div>}
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Lot details</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
           <label style={field}>
             <span style={label}>Source</span>
             <select value={f.source} onChange={set('source')} style={modalInput}>
@@ -482,7 +483,7 @@ function ExternalLotModal({ row, onSave, onClose }) {
           <span style={label}>Title / material description</span>
           <input value={f.title} onChange={set('title')} style={modalInput} placeholder="Required" />
         </label>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
           <label style={field}>
             <span style={label}>Location</span>
             <input value={f.location} onChange={set('location')} style={modalInput} />
@@ -492,7 +493,7 @@ function ExternalLotModal({ row, onSave, onClose }) {
             <input value={f.category} onChange={set('category')} style={modalInput} />
           </label>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
           <label style={field}>
             <span style={label}>Qty / Unit</span>
             <input value={f.qty_unit} onChange={set('qty_unit')} style={modalInput} />
@@ -512,7 +513,7 @@ function ExternalLotModal({ row, onSave, onClose }) {
           <textarea value={f.notes} onChange={set('notes')} rows={2} style={{ ...modalInput, resize: 'vertical' }} />
         </label>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 14 }}>
           <label style={field}>
             <span style={label}>Status</span>
             <select value={f.watch_status} onChange={set('watch_status')} style={modalInput}>
@@ -526,7 +527,7 @@ function ExternalLotModal({ row, onSave, onClose }) {
         </div>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Inspection</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 14 }}>
           <label style={field}>
             <span style={label}>Status</span>
             <select value={f.inspection_status} onChange={set('inspection_status')} style={modalInput}>
@@ -540,7 +541,7 @@ function ExternalLotModal({ row, onSave, onClose }) {
         </div>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>EMD</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 12, alignItems: 'end', marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 12, alignItems: 'end', marginBottom: 14 }}>
           <label style={{ ...field, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <input type="checkbox" checked={f.emd_required} onChange={set('emd_required')} />
             <span style={label}>Required</span>
@@ -556,7 +557,7 @@ function ExternalLotModal({ row, onSave, onClose }) {
         </div>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Rates &amp; landing cost</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 6 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 6 }}>
           <label style={field}>
             <span style={label}>Target rate</span>
             <input value={f.target_rate} onChange={set('target_rate')} style={modalInput} />
@@ -575,7 +576,7 @@ function ExternalLotModal({ row, onSave, onClose }) {
         </div>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Auction-day log</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 18 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 18 }}>
           <label style={field}>
             <span style={label}>Last bid</span>
             <input value={f.last_bid} onChange={set('last_bid')} style={modalInput} />
@@ -713,7 +714,7 @@ function AwardedLotModal({ row, onSave, onClose }) {
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 560, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 'min(560px, 94vw)', maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>{isNew ? 'Add Awarded Lot' : 'Edit Awarded Lot'}</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
@@ -721,7 +722,7 @@ function AwardedLotModal({ row, onSave, onClose }) {
 
         {err && <div style={{ fontSize: 12, color: C.red, marginBottom: 12 }}>{err}</div>}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
           <label style={field}>
             <span style={label}>Source</span>
             <select value={f.source} onChange={set('source')} style={modalInput}>
@@ -737,7 +738,7 @@ function AwardedLotModal({ row, onSave, onClose }) {
           <span style={label}>Title / material description</span>
           <input value={f.title} onChange={set('title')} style={modalInput} placeholder="Required" />
         </label>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
           <label style={field}>
             <span style={label}>Location</span>
             <input value={f.location} onChange={set('location')} style={modalInput} />
@@ -747,7 +748,7 @@ function AwardedLotModal({ row, onSave, onClose }) {
             <input value={f.category} onChange={set('category')} style={modalInput} />
           </label>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 16 }}>
           <label style={field}>
             <span style={label}>Qty / Unit</span>
             <input value={f.qty_unit} onChange={set('qty_unit')} style={modalInput} />
@@ -773,7 +774,7 @@ function AwardedLotModal({ row, onSave, onClose }) {
         </div>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Payment</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 14 }}>
           <label style={field}>
             <span style={label}>Due date</span>
             <input type="date" value={f.payment_due_date || ''} onChange={set('payment_due_date')} style={modalInput} />
@@ -791,7 +792,7 @@ function AwardedLotModal({ row, onSave, onClose }) {
         </div>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Delivery &amp; lifting</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 14 }}>
           <label style={field}>
             <span style={label}>Delivery due</span>
             <input type="date" value={f.delivery_due_date || ''} onChange={set('delivery_due_date')} style={modalInput} />
@@ -806,7 +807,7 @@ function AwardedLotModal({ row, onSave, onClose }) {
           </label>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 14 }}>
           <label style={field}>
             <span style={label}>Expenses</span>
             <input value={f.expenses} onChange={set('expenses')} style={modalInput} />
@@ -867,7 +868,7 @@ function LiftedMaterialModal({ row, onSave, onClose }) {
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 480, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 'min(480px, 94vw)', maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>{isNew ? 'Log Lifting' : 'Edit Lifting Entry'}</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
@@ -875,7 +876,7 @@ function LiftedMaterialModal({ row, onSave, onClose }) {
 
         {err && <div style={{ fontSize: 12, color: C.red, marginBottom: 12 }}>{err}</div>}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
           <label style={field}>
             <span style={label}>Lot No</span>
             <input value={f.lot_no} onChange={set('lot_no')} style={modalInput} />
@@ -889,7 +890,7 @@ function LiftedMaterialModal({ row, onSave, onClose }) {
           <span style={label}>Title / material description</span>
           <input value={f.title} onChange={set('title')} style={modalInput} placeholder="Required" />
         </label>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
           <label style={field}>
             <span style={label}>Qty lifted</span>
             <input value={f.qty} onChange={set('qty')} style={modalInput} />
@@ -899,7 +900,7 @@ function LiftedMaterialModal({ row, onSave, onClose }) {
             <input value={f.vehicle_no} onChange={set('vehicle_no')} style={modalInput} />
           </label>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
           <label style={field}>
             <span style={label}>Transporter</span>
             <input value={f.transporter} onChange={set('transporter')} style={modalInput} />
@@ -967,7 +968,7 @@ function SaleOrderModal({ row, onSave, onClose }) {
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 540, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 'min(540px, 94vw)', maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 16 }}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>{isNew ? 'Add Sale Order' : 'Edit Sale Order'}</div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
@@ -975,7 +976,7 @@ function SaleOrderModal({ row, onSave, onClose }) {
 
         {err && <div style={{ fontSize: 12, color: C.red, marginBottom: 12 }}>{err}</div>}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
           <label style={field}>
             <span style={label}>Order no</span>
             <input value={f.order_no} onChange={set('order_no')} style={modalInput} />
@@ -985,7 +986,7 @@ function SaleOrderModal({ row, onSave, onClose }) {
             <input type="date" value={f.order_date || ''} onChange={set('order_date')} style={modalInput} />
           </label>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
           <label style={field}>
             <span style={label}>Buyer name</span>
             <input value={f.buyer_name} onChange={set('buyer_name')} style={modalInput} placeholder="Required" />
@@ -995,7 +996,7 @@ function SaleOrderModal({ row, onSave, onClose }) {
             <input value={f.buyer_contact} onChange={set('buyer_contact')} style={modalInput} />
           </label>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 12 }}>
           <label style={field}>
             <span style={label}>Lot No</span>
             <input value={f.lot_no} onChange={set('lot_no')} style={modalInput} />
@@ -1005,7 +1006,7 @@ function SaleOrderModal({ row, onSave, onClose }) {
             <input value={f.title} onChange={set('title')} style={modalInput} placeholder="Required" />
           </label>
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 16 }}>
           <label style={field}>
             <span style={label}>Qty</span>
             <input value={f.qty} onChange={set('qty')} style={modalInput} />
@@ -1021,7 +1022,7 @@ function SaleOrderModal({ row, onSave, onClose }) {
         </div>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Status &amp; delivery</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 14 }}>
           <label style={field}>
             <span style={label}>Status</span>
             <select value={f.status} onChange={set('status')} style={modalInput}>
@@ -1035,7 +1036,7 @@ function SaleOrderModal({ row, onSave, onClose }) {
         </div>
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Payment</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 14 }}>
           <label style={field}>
             <span style={label}>Status</span>
             <select value={f.payment_status} onChange={set('payment_status')} style={modalInput}>
@@ -1347,7 +1348,7 @@ export default function App() {
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: '-apple-system,Segoe UI,Arial,sans-serif', color: C.txt }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 22px', background: C.surf, borderBottom: `1px solid ${C.bdr}` }}>
+      <header className="app-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 22px', background: C.surf, borderBottom: `1px solid ${C.bdr}` }}>
         <div>
           <div style={{ fontWeight: 700, fontSize: 16 }}>🚂 IREPS Tracker</div>
           <div style={{ fontSize: 11, color: C.sub }}>
@@ -1359,8 +1360,8 @@ export default function App() {
 
       {err && <div style={{ margin: 16, padding: 10, background: '#fef2f2', color: C.red, borderRadius: 6, fontSize: 13 }}>{err}</div>}
 
-      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
-        <nav style={{ width: 190, flexShrink: 0, borderRight: `1px solid ${C.bdr}`, padding: '20px 0' }}>
+      <div className="app-shell" style={{ display: 'flex', alignItems: 'flex-start' }}>
+        <nav className="app-nav" style={{ width: 190, flexShrink: 0, borderRight: `1px solid ${C.bdr}`, padding: '20px 0' }}>
           {TABS.map(t => (
             <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
               display: 'block', width: '100%', textAlign: 'left', padding: '9px 20px',
@@ -1373,7 +1374,7 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div style={{ padding: 20, flex: 1, minWidth: 0 }}>
+        <div className="app-content" style={{ padding: 20, flex: 1, minWidth: 0 }}>
       {activeTab === 'keywords' && (<>
         <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Keyword Watch</h2>
         <form onSubmit={addKeyword} style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1417,7 +1418,7 @@ export default function App() {
       </>)}
 
       {activeTab === 'lots' && (<>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+        <div className="filters-bar" style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
           <input placeholder="Search keyword(s), comma-separated…" value={search} onChange={e => setSearch(e.target.value)}
             style={{ flex: 1, minWidth: 220, padding: '8px 10px', borderRadius: 6, border: `1px solid ${C.bdr}`, fontSize: 13 }} />
           <select value={category} onChange={e => setCategory(e.target.value)} style={{ padding: '8px 10px', borderRadius: 6, border: `1px solid ${C.bdr}`, fontSize: 13 }}>
