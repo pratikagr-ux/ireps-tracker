@@ -1092,6 +1092,7 @@ export default function App() {
   const [editLifting, setEditLifting] = useState(undefined); // undefined = modal closed, null = new
   const [saleOrders, setSaleOrders] = useState([]);
   const [editSaleOrder, setEditSaleOrder] = useState(undefined); // undefined = modal closed, null = new
+  const [activeTab, setActiveTab] = useState('lots');
 
   // Watchlisted IREPS lots + manually-tracked external lots, grouped by
   // category and ranked by landing cost within each group, so the cheapest
@@ -1331,6 +1332,19 @@ export default function App() {
     }
   };
 
+  const landingItemCount = landingComparison.reduce((n, [, items]) => n + items.length, 0);
+
+  const TABS = [
+    { id: 'lots', label: 'Lots' },
+    { id: 'keywords', label: 'Keyword Watch' },
+    { id: 'watchlist', label: 'Watchlist', count: bookmarks.length },
+    { id: 'external', label: 'External Auctions', count: externalLots.length },
+    { id: 'landing', label: 'Landing Cost', count: landingItemCount },
+    { id: 'awarded', label: 'Awarded Lots', count: awardedLots.length },
+    { id: 'lifted', label: 'Lifted Material', count: liftedMaterial.length },
+    { id: 'sales', label: 'Sale Orders', count: saleOrders.length },
+  ];
+
   return (
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: '-apple-system,Segoe UI,Arial,sans-serif', color: C.txt }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 22px', background: C.surf, borderBottom: `1px solid ${C.bdr}` }}>
@@ -1345,7 +1359,22 @@ export default function App() {
 
       {err && <div style={{ margin: 16, padding: 10, background: '#fef2f2', color: C.red, borderRadius: 6, fontSize: 13 }}>{err}</div>}
 
-      <div style={{ padding: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+        <nav style={{ width: 190, flexShrink: 0, borderRight: `1px solid ${C.bdr}`, padding: '20px 0' }}>
+          {TABS.map(t => (
+            <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
+              display: 'block', width: '100%', textAlign: 'left', padding: '9px 20px',
+              border: 'none', background: activeTab === t.id ? `${C.blue}14` : 'transparent',
+              borderLeft: `3px solid ${activeTab === t.id ? C.blue : 'transparent'}`,
+              color: activeTab === t.id ? C.blue : C.txt, fontWeight: activeTab === t.id ? 600 : 400,
+              fontSize: 13, cursor: 'pointer',
+            }}>
+              {t.label}{t.count !== undefined ? ` (${t.count})` : ''}
+            </button>
+          ))}
+        </nav>
+        <div style={{ padding: 20, flex: 1, minWidth: 0 }}>
+      {activeTab === 'keywords' && (<>
         <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Keyword Watch</h2>
         <form onSubmit={addKeyword} style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {keywords.map(k => (
@@ -1385,7 +1414,9 @@ export default function App() {
             </table>
           </div>
         )}
+      </>)}
 
+      {activeTab === 'lots' && (<>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
           <input placeholder="Search keyword(s), comma-separated…" value={search} onChange={e => setSearch(e.target.value)}
             style={{ flex: 1, minWidth: 220, padding: '8px 10px', borderRadius: 6, border: `1px solid ${C.bdr}`, fontSize: 13 }} />
@@ -1450,8 +1481,10 @@ export default function App() {
             </tbody>
           </table>
         </div>
+      </>)}
 
-        <h2 style={{ fontSize: 15, margin: '26px 0 10px' }}>Watchlist ({bookmarks.length})</h2>
+      {activeTab === 'watchlist' && (<>
+        <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Watchlist ({bookmarks.length})</h2>
         <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
@@ -1470,8 +1503,10 @@ export default function App() {
             </tbody>
           </table>
         </div>
+      </>)}
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '26px 0 10px' }}>
+      {activeTab === 'external' && (<>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 10px' }}>
           <h2 style={{ fontSize: 15, margin: 0 }}>External Auctions ({externalLots.length})</h2>
           <button onClick={() => setEditExternalLot(null)} style={smallBtn}>Add External Lot</button>
         </div>
@@ -1493,41 +1528,42 @@ export default function App() {
             </tbody>
           </table>
         </div>
+      </>)}
 
-        {(bookmarks.length > 0 || externalLots.length > 0) && (
-          <>
-            <h2 style={{ fontSize: 15, margin: '26px 0 10px' }}>Landing Cost Comparison</h2>
-            <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-                <thead>
-                  <tr style={{ background: '#fafafa', textAlign: 'left' }}>
-                    <th style={th}>Category</th><th style={th}>Source</th><th style={th}>Lot No</th>
-                    <th style={th}>Material Descr.</th><th style={th}>Target Rate</th><th style={th}>Lifting</th>
-                    <th style={th}>Transport</th><th style={th}>Landing Cost</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {landingComparison.map(([cat, items]) => items.map(({ key, source, row, cost }, i) => (
-                    <tr key={key} style={{ borderTop: `1px solid ${C.bdr}` }}>
-                      <td style={{ ...td, fontWeight: i === 0 ? 600 : 400, color: i === 0 ? C.txt : C.sub }}>{i === 0 ? cat : ''}</td>
-                      <td style={td}>{source}</td>
-                      <td style={td}>{row.lot_no || row.external_lot_no || '-'}</td>
-                      <td style={{ ...td, maxWidth: 260 }}>{row.material_descr || row.title}</td>
-                      <td style={td}>{row.target_rate || '-'}</td>
-                      <td style={td}>{row.lifting_expense || '-'}</td>
-                      <td style={td}>{row.transport_expense || '-'}</td>
-                      <td style={{ ...td, fontWeight: i === 0 && cost !== null ? 700 : 400, color: i === 0 && cost !== null ? C.green : C.txt }}>
-                        {cost === null ? '-' : cost.toFixed(2)}
-                      </td>
-                    </tr>
-                  )))}
-                </tbody>
-              </table>
-            </div>
-          </>
-        )}
+      {activeTab === 'landing' && (<>
+        <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Landing Cost Comparison</h2>
+        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: '#fafafa', textAlign: 'left' }}>
+                <th style={th}>Category</th><th style={th}>Source</th><th style={th}>Lot No</th>
+                <th style={th}>Material Descr.</th><th style={th}>Target Rate</th><th style={th}>Lifting</th>
+                <th style={th}>Transport</th><th style={th}>Landing Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {landingComparison.map(([cat, items]) => items.map(({ key, source, row, cost }, i) => (
+                <tr key={key} style={{ borderTop: `1px solid ${C.bdr}` }}>
+                  <td style={{ ...td, fontWeight: i === 0 ? 600 : 400, color: i === 0 ? C.txt : C.sub }}>{i === 0 ? cat : ''}</td>
+                  <td style={td}>{source}</td>
+                  <td style={td}>{row.lot_no || row.external_lot_no || '-'}</td>
+                  <td style={{ ...td, maxWidth: 260 }}>{row.material_descr || row.title}</td>
+                  <td style={td}>{row.target_rate || '-'}</td>
+                  <td style={td}>{row.lifting_expense || '-'}</td>
+                  <td style={td}>{row.transport_expense || '-'}</td>
+                  <td style={{ ...td, fontWeight: i === 0 && cost !== null ? 700 : 400, color: i === 0 && cost !== null ? C.green : C.txt }}>
+                    {cost === null ? '-' : cost.toFixed(2)}
+                  </td>
+                </tr>
+              )))}
+              {!landingItemCount && <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: C.sub }}>Nothing to compare yet — add a target rate to a Watchlist or External Auction lot.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </>)}
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '26px 0 10px' }}>
+      {activeTab === 'awarded' && (<>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 10px' }}>
           <h2 style={{ fontSize: 15, margin: 0 }}>Awarded Lots ({awardedLots.length})</h2>
           <button onClick={() => setEditAward(null)} style={smallBtn}>Add Awarded Lot</button>
         </div>
@@ -1550,8 +1586,10 @@ export default function App() {
             </tbody>
           </table>
         </div>
+      </>)}
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '26px 0 10px' }}>
+      {activeTab === 'lifted' && (<>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 10px' }}>
           <h2 style={{ fontSize: 15, margin: 0 }}>Lifted Material ({liftedMaterial.length})</h2>
           <button onClick={() => setEditLifting(null)} style={smallBtn}>Log Lifting</button>
         </div>
@@ -1572,8 +1610,10 @@ export default function App() {
             </tbody>
           </table>
         </div>
+      </>)}
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '26px 0 10px' }}>
+      {activeTab === 'sales' && (<>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '0 0 10px' }}>
           <h2 style={{ fontSize: 15, margin: 0 }}>Sale Orders ({saleOrders.length})</h2>
           <button onClick={() => setEditSaleOrder(null)} style={smallBtn}>Add Sale Order</button>
         </div>
@@ -1593,6 +1633,8 @@ export default function App() {
               {!saleOrders.length && <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: C.sub }}>No sale orders yet.</td></tr>}
             </tbody>
           </table>
+        </div>
+      </>)}
         </div>
       </div>
       {detailLot && <LotDetailModal row={detailLot} onClose={() => setDetailLot(null)} />}
