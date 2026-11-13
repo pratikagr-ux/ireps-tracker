@@ -104,3 +104,43 @@ alter table bookmarks add column if not exists last_bid text;
 alter table bookmarks add column if not exists won_by text;
 alter table bookmarks add column if not exists lifting_expense text;
 alter table bookmarks add column if not exists transport_expense text;
+
+-- Phase 5: external_lots -- manual tracking for auctions run on sites other
+-- than IREPS (MSTC, MJunction, ...) that we don't scrape. Carries the same
+-- watch/inspection/EMD/auction-day fields as bookmarks, plus the basic lot
+-- description fields that a scraped `lots` row would normally supply.
+-- Scoped to the signed-in user via RLS, same pattern as bookmarks/keywords.
+create table if not exists external_lots (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  source text not null default 'MSTC',
+  external_lot_no text,
+  title text not null,
+  location text,
+  category text,
+  qty_unit text,
+  auction_date date,
+  source_url text,
+  notes text,
+  watch_status text not null default 'watching',
+  team text,
+  inspection_status text not null default 'pending',
+  inspection_notes text,
+  emd_required boolean not null default false,
+  emd_amount text,
+  emd_paid boolean not null default false,
+  target_rate text,
+  lifting_expense text,
+  transport_expense text,
+  last_bid text,
+  sold_rate text,
+  won_by text,
+  created_at timestamptz not null default now()
+);
+
+alter table external_lots enable row level security;
+
+create policy "users manage their own external lots"
+  on external_lots for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);

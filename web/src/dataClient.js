@@ -146,3 +146,28 @@ export async function fetchKeywordMatches(keywords) {
   if (error) throw error;
   return data || [];
 }
+
+// ── External auctions (MSTC/MJunction/other, per signed-in user) ───────────
+export async function fetchExternalLots() {
+  const { data, error } = await supabase.from('external_lots').select('*').order('created_at', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addExternalLot(fields) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (!userId) throw new Error('Not signed in');
+  const { error } = await supabase.from('external_lots').insert({ user_id: userId, ...fields });
+  if (error) throw error;
+}
+
+export async function updateExternalLot(id, fields) {
+  const { error } = await supabase.from('external_lots').update(fields).eq('id', id);
+  if (error) throw error;
+}
+
+export async function removeExternalLot(id) {
+  const { error } = await supabase.from('external_lots').delete().eq('id', id);
+  if (error) throw error;
+}

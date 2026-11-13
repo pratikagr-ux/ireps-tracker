@@ -29,6 +29,7 @@ const TAG_COLOR = { new: C.green, updated: C.amber, expired: C.red, unchanged: C
 const WATCH_STATUSES = ['watching', 'shortlisted', 'inspected', 'participating', 'won', 'lost'];
 const WATCH_STATUS_COLOR = { watching: C.sub, shortlisted: C.blue, inspected: C.amber, participating: C.amber, won: C.green, lost: C.red };
 const INSPECTION_STATUSES = ['pending', 'scheduled', 'done', 'skipped'];
+const EXTERNAL_SOURCES = ['MSTC', 'MJunction', 'Other'];
 
 function parseNum(v) {
   const n = parseFloat(v);
@@ -403,6 +404,197 @@ function WatchlistEditModal({ row, onSave, onClose }) {
   );
 }
 
+function ExternalLotModal({ row, onSave, onClose }) {
+  const isNew = !row;
+  const [f, setF] = useState({
+    source: row?.source || 'MSTC',
+    external_lot_no: row?.external_lot_no || '',
+    title: row?.title || '',
+    location: row?.location || '',
+    category: row?.category || '',
+    qty_unit: row?.qty_unit || '',
+    auction_date: row?.auction_date || '',
+    source_url: row?.source_url || '',
+    notes: row?.notes || '',
+    watch_status: row?.watch_status || 'watching',
+    team: row?.team || '',
+    inspection_status: row?.inspection_status || 'pending',
+    inspection_notes: row?.inspection_notes || '',
+    emd_required: !!row?.emd_required,
+    emd_amount: row?.emd_amount || '',
+    emd_paid: !!row?.emd_paid,
+    target_rate: row?.target_rate || '',
+    lifting_expense: row?.lifting_expense || '',
+    transport_expense: row?.transport_expense || '',
+    last_bid: row?.last_bid || '',
+    sold_rate: row?.sold_rate || '',
+    won_by: row?.won_by || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const set = (k) => (e) => setF(prev => ({ ...prev, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
+
+  const save = async () => {
+    if (!f.title.trim()) { setErr('Title is required'); return; }
+    setSaving(true);
+    try {
+      const fields = { ...f, auction_date: f.auction_date || null };
+      await onSave(fields);
+      onClose();
+    } catch (e) {
+      setErr(e.message || String(e));
+      setSaving(false);
+    }
+  };
+
+  const cost = landingCost(f);
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 560, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{isNew ? 'Add External Lot' : 'Edit External Lot'}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
+        </div>
+
+        {err && <div style={{ fontSize: 12, color: C.red, marginBottom: 12 }}>{err}</div>}
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Lot details</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={field}>
+            <span style={label}>Source</span>
+            <select value={f.source} onChange={set('source')} style={modalInput}>
+              {EXTERNAL_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label style={field}>
+            <span style={label}>Lot No</span>
+            <input value={f.external_lot_no} onChange={set('external_lot_no')} style={modalInput} />
+          </label>
+        </div>
+        <label style={{ ...field, marginBottom: 12 }}>
+          <span style={label}>Title / material description</span>
+          <input value={f.title} onChange={set('title')} style={modalInput} placeholder="Required" />
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={field}>
+            <span style={label}>Location</span>
+            <input value={f.location} onChange={set('location')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Category</span>
+            <input value={f.category} onChange={set('category')} style={modalInput} />
+          </label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={field}>
+            <span style={label}>Qty / Unit</span>
+            <input value={f.qty_unit} onChange={set('qty_unit')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Auction date</span>
+            <input type="date" value={f.auction_date || ''} onChange={set('auction_date')} style={modalInput} />
+          </label>
+        </div>
+        <label style={{ ...field, marginBottom: 16 }}>
+          <span style={label}>Link to auction page</span>
+          <input value={f.source_url} onChange={set('source_url')} style={modalInput} placeholder="https://..." />
+        </label>
+
+        <label style={{ ...field, marginBottom: 14 }}>
+          <span style={label}>Notes</span>
+          <textarea value={f.notes} onChange={set('notes')} rows={2} style={{ ...modalInput, resize: 'vertical' }} />
+        </label>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <label style={field}>
+            <span style={label}>Status</span>
+            <select value={f.watch_status} onChange={set('watch_status')} style={modalInput}>
+              {WATCH_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label style={field}>
+            <span style={label}>Team</span>
+            <input value={f.team} onChange={set('team')} style={modalInput} placeholder="Who's on this" />
+          </label>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Inspection</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <label style={field}>
+            <span style={label}>Status</span>
+            <select value={f.inspection_status} onChange={set('inspection_status')} style={modalInput}>
+              {INSPECTION_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label style={field}>
+            <span style={label}>Inspection notes</span>
+            <input value={f.inspection_notes} onChange={set('inspection_notes')} style={modalInput} />
+          </label>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>EMD</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 12, alignItems: 'end', marginBottom: 14 }}>
+          <label style={{ ...field, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={f.emd_required} onChange={set('emd_required')} />
+            <span style={label}>Required</span>
+          </label>
+          <label style={field}>
+            <span style={label}>Amount</span>
+            <input value={f.emd_amount} onChange={set('emd_amount')} style={modalInput} disabled={!f.emd_required} />
+          </label>
+          <label style={{ ...field, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={f.emd_paid} onChange={set('emd_paid')} disabled={!f.emd_required} />
+            <span style={label}>Paid</span>
+          </label>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Rates &amp; landing cost</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 6 }}>
+          <label style={field}>
+            <span style={label}>Target rate</span>
+            <input value={f.target_rate} onChange={set('target_rate')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Lifting expense</span>
+            <input value={f.lifting_expense} onChange={set('lifting_expense')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Transport expense</span>
+            <input value={f.transport_expense} onChange={set('transport_expense')} style={modalInput} />
+          </label>
+        </div>
+        <div style={{ fontSize: 12, color: C.sub, marginBottom: 14 }}>
+          Estimated landing cost: <strong style={{ color: C.txt }}>{cost === null ? '-' : cost.toFixed(2)}</strong>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Auction-day log</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 18 }}>
+          <label style={field}>
+            <span style={label}>Last bid</span>
+            <input value={f.last_bid} onChange={set('last_bid')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Sold rate</span>
+            <input value={f.sold_rate} onChange={set('sold_rate')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Won by</span>
+            <input value={f.won_by} onChange={set('won_by')} style={modalInput} placeholder="If not us" />
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={save} disabled={saving} style={{ ...smallBtn, background: C.blue, color: '#fff', borderColor: C.blue }}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button onClick={onClose} style={smallBtn}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main app ─────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
@@ -423,14 +615,20 @@ export default function App() {
   const [newKeyword, setNewKeyword] = useState('');
   const [detailLot, setDetailLot] = useState(null);
   const [editWatchRow, setEditWatchRow] = useState(null);
+  const [externalLots, setExternalLots] = useState([]);
+  const [editExternalLot, setEditExternalLot] = useState(undefined); // undefined = modal closed, null = new
 
-  // Watchlisted lots grouped by category and ranked by landing cost within
-  // each group, so the cheapest option to actually land is obvious before
-  // you commit to bidding on any one of them.
+  // Watchlisted IREPS lots + manually-tracked external lots, grouped by
+  // category and ranked by landing cost within each group, so the cheapest
+  // option to actually land is obvious before you commit to bidding on any
+  // one of them -- regardless of which site it's being auctioned on.
   const landingComparison = useMemo(() => {
-    const withCost = bookmarks.map(row => ({ row, cost: landingCost(row) }));
+    const combined = [
+      ...bookmarks.map(row => ({ key: row.lot_no, source: 'IREPS', row, cost: landingCost(row) })),
+      ...externalLots.map(row => ({ key: `ext-${row.id}`, source: row.source, row, cost: landingCost(row) })),
+    ];
     const byCategory = {};
-    for (const item of withCost) {
+    for (const item of combined) {
       const cat = item.row.category || 'Uncategorized';
       (byCategory[cat] = byCategory[cat] || []).push(item);
     }
@@ -442,7 +640,7 @@ export default function App() {
       });
     }
     return Object.entries(byCategory).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [bookmarks]);
+  }, [bookmarks, externalLots]);
 
   useEffect(() => {
     if (!supabase) { setSession(null); return; }
@@ -486,14 +684,24 @@ export default function App() {
     }
   }, []);
 
+  const loadExternalLots = useCallback(async () => {
+    try {
+      const rows = await DB.fetchExternalLots();
+      setExternalLots(rows);
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  }, []);
+
   useEffect(() => {
     if (session) {
       loadLots();
       loadBookmarks();
       loadKeywords();
+      loadExternalLots();
       DB.fetchLatestScan().then(setLatestScan).catch(() => {});
     }
-  }, [session, loadLots, loadBookmarks, loadKeywords]);
+  }, [session, loadLots, loadBookmarks, loadKeywords, loadExternalLots]);
 
   useEffect(() => {
     if (!session || !keywords.length) { setKeywordMatches([]); return; }
@@ -529,6 +737,21 @@ export default function App() {
     try {
       await DB.updateBookmark(lotNo, fields);
       await loadBookmarks();
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  };
+
+  const saveExternalLot = async (fields) => {
+    if (editExternalLot) await DB.updateExternalLot(editExternalLot.id, fields);
+    else await DB.addExternalLot(fields);
+    await loadExternalLots();
+  };
+
+  const removeExternalLot = async (id) => {
+    try {
+      await DB.removeExternalLot(id);
+      await loadExternalLots();
     } catch (e) {
       setErr(e.message || String(e));
     }
@@ -695,24 +918,47 @@ export default function App() {
           </table>
         </div>
 
-        {bookmarks.length > 0 && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '26px 0 10px' }}>
+          <h2 style={{ fontSize: 15, margin: 0 }}>External Auctions ({externalLots.length})</h2>
+          <button onClick={() => setEditExternalLot(null)} style={smallBtn}>Add External Lot</button>
+        </div>
+        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: '#fafafa', textAlign: 'left' }}>
+                <th style={th}>Source</th><th style={th}>Lot No</th><th style={th}>Title</th>
+                <th style={th}>Auction Date</th><th style={th}>Status</th><th style={th}>Target Rate</th>
+                <th style={th}>Landing Cost</th><th style={th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {externalLots.map(row => (
+                <ExternalLotRow key={row.id} row={row} onRemove={() => removeExternalLot(row.id)} onEdit={() => setEditExternalLot(row)} />
+              ))}
+              {!externalLots.length && <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: C.sub }}>Nothing tracked from MSTC/MJunction/other sites yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        {(bookmarks.length > 0 || externalLots.length > 0) && (
           <>
             <h2 style={{ fontSize: 15, margin: '26px 0 10px' }}>Landing Cost Comparison</h2>
             <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
                 <thead>
                   <tr style={{ background: '#fafafa', textAlign: 'left' }}>
-                    <th style={th}>Category</th><th style={th}>Lot No</th><th style={th}>Material Descr.</th>
-                    <th style={th}>Target Rate</th><th style={th}>Lifting</th><th style={th}>Transport</th>
-                    <th style={th}>Landing Cost</th>
+                    <th style={th}>Category</th><th style={th}>Source</th><th style={th}>Lot No</th>
+                    <th style={th}>Material Descr.</th><th style={th}>Target Rate</th><th style={th}>Lifting</th>
+                    <th style={th}>Transport</th><th style={th}>Landing Cost</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {landingComparison.map(([cat, items]) => items.map(({ row, cost }, i) => (
-                    <tr key={row.lot_no} style={{ borderTop: `1px solid ${C.bdr}` }}>
+                  {landingComparison.map(([cat, items]) => items.map(({ key, source, row, cost }, i) => (
+                    <tr key={key} style={{ borderTop: `1px solid ${C.bdr}` }}>
                       <td style={{ ...td, fontWeight: i === 0 ? 600 : 400, color: i === 0 ? C.txt : C.sub }}>{i === 0 ? cat : ''}</td>
-                      <td style={td}>{row.lot_no}</td>
-                      <td style={{ ...td, maxWidth: 260 }}>{row.material_descr}</td>
+                      <td style={td}>{source}</td>
+                      <td style={td}>{row.lot_no || row.external_lot_no || '-'}</td>
+                      <td style={{ ...td, maxWidth: 260 }}>{row.material_descr || row.title}</td>
                       <td style={td}>{row.target_rate || '-'}</td>
                       <td style={td}>{row.lifting_expense || '-'}</td>
                       <td style={td}>{row.transport_expense || '-'}</td>
@@ -729,7 +975,31 @@ export default function App() {
       </div>
       {detailLot && <LotDetailModal row={detailLot} onClose={() => setDetailLot(null)} />}
       {editWatchRow && <WatchlistEditModal row={editWatchRow} onSave={saveBookmark} onClose={() => setEditWatchRow(null)} />}
+      {editExternalLot !== undefined && <ExternalLotModal row={editExternalLot} onSave={saveExternalLot} onClose={() => setEditExternalLot(undefined)} />}
     </div>
+  );
+}
+
+function ExternalLotRow({ row, onRemove, onEdit }) {
+  const cost = landingCost(row);
+  return (
+    <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
+      <td style={td}>{row.source}</td>
+      <td style={td}>{row.external_lot_no || '-'}</td>
+      <td style={{ ...td, maxWidth: 240 }}>
+        {row.source_url ? (
+          <a href={row.source_url} target="_blank" rel="noopener noreferrer" style={{ color: C.blue }}>{row.title} ↗</a>
+        ) : row.title}
+      </td>
+      <td style={td}>{row.auction_date || '-'}</td>
+      <td style={td}><Badge text={row.watch_status || 'watching'} color={WATCH_STATUS_COLOR[row.watch_status] || C.sub} /></td>
+      <td style={td}>{row.target_rate || '-'}</td>
+      <td style={td}>{cost === null ? '-' : cost.toFixed(2)}</td>
+      <td style={td}>
+        <button onClick={onEdit} style={smallBtn}>Edit</button>{' '}
+        <button onClick={onRemove} style={{ ...smallBtn, color: C.red }}>Remove</button>
+      </td>
+    </tr>
   );
 }
 
