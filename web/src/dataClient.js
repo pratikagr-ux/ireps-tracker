@@ -35,11 +35,12 @@ export function onAuthChange(cb) {
 // Server-side filtering/search via PostgREST, mirroring webapp.py's /lots
 // route (search across lot_no/material_descr/railway/depot, category,
 // change_tag, status filters).
-export async function fetchLots({ search = '', category = '', changeTag = '', status = 'active', limit = 500 } = {}) {
+export async function fetchLots({ search = '', category = '', changeTag = '', status = 'active', source = '', limit = 500 } = {}) {
   let q = supabase.from('lots').select('*').order('publish_date', { ascending: false }).limit(limit);
   if (status) q = q.eq('status', status);
   if (category) q = q.eq('category', category);
   if (changeTag) q = q.eq('change_tag', changeTag);
+  if (source) q = q.eq('source', source);
   if (search.trim()) {
     const terms = search.split(',').map(t => t.trim()).filter(Boolean);
     for (const term of terms) {
@@ -52,11 +53,21 @@ export async function fetchLots({ search = '', category = '', changeTag = '', st
   return data || [];
 }
 
-export async function fetchCategoryCounts() {
-  const { data, error } = await supabase.from('lots').select('category').eq('status', 'active');
-  if (error) throw error;
+export async function fetchCategoryCounts(source = '') {
+  // The project's PostgREST max-rows setting caps any single response
+  // (1000 by default), which silently under-counted categories once total
+  // active lots passed that -- a client-side .limit() can't override a
+  // server-side cap, so page through with .range() instead.
   const counts = {};
-  for (const row of data || []) counts[row.category] = (counts[row.category] || 0) + 1;
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    let q = supabase.from('lots').select('category').eq('status', 'active').range(from, from + pageSize - 1);
+    if (source) q = q.eq('source', source);
+    const { data, error } = await q;
+    if (error) throw error;
+    for (const row of data || []) counts[row.category] = (counts[row.category] || 0) + 1;
+    if (!data || data.length < pageSize) break;
+  }
   return Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1]));
 }
 

@@ -1,4 +1,4 @@
-name: Daily IREPS Autoscan
+name: Daily Auction Autoscan
 
 on:
   schedule:
@@ -27,5 +27,9 @@ jobs:
           # client bundle). Set as a repo secret (Settings -> Secrets and
           # variables -> Actions) from the Supabase project's Settings -> API
           # page.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      - run: python matex_autoscan.py
+        env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

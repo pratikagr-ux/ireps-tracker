@@ -128,6 +128,7 @@ def process_row(row: dict, existing: dict[str, dict], now_iso: str) -> dict:
     return {
         "lot_no": row["lot_no"],
         "lot_id": row.get("lot_id", ""),
+        "source": "IREPS",
         "railway": row["railway"],
         "depot": row["depot"],
         "qty_unit": row["qty_unit"],
@@ -230,13 +231,16 @@ def push_scan_summary(base_url: str, headers: dict, started_at: str, finished_at
 
 
 def fetch_watchlisted_lots(base_url: str, headers: dict) -> list[dict]:
-    """lot_no/lot_id pairs for every lot anyone has bookmarked, via the
-    bookmarks -> lots FK embed (service_role key bypasses RLS, so this sees
-    every user's bookmarks, not just one)."""
+    """lot_no/lot_id pairs for every IREPS lot anyone has bookmarked, via
+    the bookmarks -> lots FK embed (service_role key bypasses RLS, so this
+    sees every user's bookmarks, not just one). Scoped to source='IREPS'
+    (via the embed filter + !inner) since this fetches ireps.gov.in's own
+    per-lot detail page -- a bookmarked Matex lot's lot_id wouldn't mean
+    anything there."""
     resp = requests.get(
         f"{base_url}/rest/v1/bookmarks",
         headers=headers,
-        params={"select": "lot_no,lots(lot_id)"},
+        params={"select": "lot_no,lots!inner(lot_id)", "lots.source": "eq.IREPS"},
         timeout=30,
     )
     resp.raise_for_status()
@@ -253,17 +257,21 @@ def fetch_watchlisted_lots(base_url: str, headers: dict) -> list[dict]:
 
 
 def fetch_lots_needing_detail(base_url: str, headers: dict) -> list[dict]:
-    """lot_no/lot_id pairs for active lots whose catalogue detail (the same
-    page "View on IREPS" opens) hasn't been synced yet, or was just added/
-    changed by this scan -- so the web app's Location column and detail
-    view/PDF/print stay accurate for every active lot, not only bookmarked
-    ones, without re-fetching detail for lots that haven't changed."""
+    """lot_no/lot_id pairs for active IREPS lots whose catalogue detail (the
+    same page "View on IREPS" opens) hasn't been synced yet, or was just
+    added/changed by this scan -- so the web app's Location column and
+    detail view/PDF/print stay accurate for every active lot, not only
+    bookmarked ones, without re-fetching detail for lots that haven't
+    changed. Scoped to source='IREPS' -- other sources (e.g. Matex) set
+    their own `detail` directly when scraped and must never be sent
+    through ireps.gov.in's per-lot detail fetch."""
     resp = requests.get(
         f"{base_url}/rest/v1/lots",
         headers=headers,
         params={
             "select": "lot_no,lot_id",
             "status": "eq.active",
+            "source": "eq.IREPS",
             "or": "(detail.is.null,change_tag.in.(new,updated))",
             "limit": "5000",
         },

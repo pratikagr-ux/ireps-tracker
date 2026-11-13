@@ -251,3 +251,9 @@ create policy "users manage their own sale orders"
   on sale_orders for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- Phase 9: lots.source distinguishes which auction site a row came from
+-- (IREPS, scraped by autoscan.py; Matex, scraped by matex_autoscan.py),
+-- so the Lots view can filter All / IREPS / Matex. Existing rows backfill
+-- to 'IREPS' via the column default -- they're the only source so far.
+alter table lots add column if not exists source text not null default 'IREPS';
