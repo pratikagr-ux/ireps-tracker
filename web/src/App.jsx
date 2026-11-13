@@ -1,4 +1,4 @@
-// IREPS Tracker — web dashboard (Supabase-backed, static, deployed to
+// Auction Tracker — web dashboard (Supabase-backed, static, deployed to
 // GitHub Pages). Same feature set as the local Flask app (webapp.py /
 // templates/index.html): browse/search/filter scanned lots, bookmark lots
 // with your own notes/rates, print selected lots, and download a
@@ -53,6 +53,36 @@ function landingCost(row) {
   return target + lifting + transport;
 }
 
+// The real custodian/material location as printed on the IREPS catalogue
+// page itself (lots.detail.Location, synced by autoscan.py) -- much more
+// useful than our zone-level railway/depot guess, which is only a fallback
+// for lots whose catalogue detail hasn't been synced yet.
+function custodianLocation(row) {
+  const detail = row.detail || {};
+  const loc = detail.Location;
+  if (!loc) return describeLocation(row.railway, row.depot);
+  return detail.State ? `${loc} (${detail.State})` : loc;
+}
+
+// The field/value pairs to show for a lot's detail view (modal/print/PDF).
+// When the real catalogue detail has been synced (lots.detail, scraped from
+// the same page "View on IREPS" opens), that IS the content -- it already
+// includes Railway/Depot, Category, Qty, Location etc. in the catalogue's
+// own wording, so we show it as-is plus our own Next Auction date (which
+// isn't a catalogue field). Otherwise fall back to our own scan summary.
+function buildDetailRows(row) {
+  const entries = Object.entries(row.detail || {});
+  if (entries.length) return [...entries, ['Next Auction', row.next_auction || '-']];
+  return [
+    ['Railway / Depot', `${row.railway} / ${row.depot}`],
+    ['Location', custodianLocation(row)],
+    ['Category', row.category],
+    ['Qty / Unit', row.qty_unit],
+    ['Min Increment', row.min_incr],
+    ['Next Auction', row.next_auction || '-'],
+  ];
+}
+
 // ── Login / sign-up ─────────────────────────────────────────────────────
 function LoginScreen({ onSignedIn }) {
   const [mode, setMode] = useState('signin'); // signin | signup
@@ -87,7 +117,7 @@ function LoginScreen({ onSignedIn }) {
       <form onSubmit={submit} style={{ width: 'min(340px, 100%)', background: C.surf, borderRadius: 12, border: `1px solid ${C.bdr}`, padding: 28, boxShadow: '0 4px 20px rgba(0,0,0,0.06)', boxSizing: 'border-box' }}>
         <div style={{ textAlign: 'center', marginBottom: 20 }}>
           <div style={{ fontSize: 32, marginBottom: 8 }}>🚂</div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: C.txt }}>IREPS Tracker</div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: C.txt }}>Auction Tracker</div>
           <div style={{ fontSize: 12, color: C.sub, marginTop: 4 }}>Sign in to see your bookmarks and rates</div>
         </div>
         <div style={{ marginBottom: 12 }}>
@@ -123,41 +153,24 @@ function downloadCataloguePdf(row) {
   doc.setFontSize(16);
   doc.text(`Lot Catalogue - Lot ${row.lot_no}`, 14, 18);
 
-  const location = describeLocation(row.railway, row.depot);
+  const hasDetail = !!(row.detail && Object.keys(row.detail).length);
   autoTable(doc, {
     startY: 24,
-    theme: 'plain',
-    styles: { fontSize: 9, cellPadding: 2 },
-    columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40 } },
-    body: [
-      ['Railway / Depot', `${row.railway} / ${row.depot}`],
-      ['Location', location],
-      ['Category', row.category],
-      ['Qty / Unit', row.qty_unit],
-      ['Min Increment', row.min_incr],
-      ['Publish Date', row.publish_date],
-      ['Next Auction', row.next_auction || '-'],
-    ],
+    head: [['Field', 'Value']],
+    body: buildDetailRows(row),
+    styles: { fontSize: 8, cellPadding: 3 },
+    columnStyles: { 0: { fontStyle: 'bold', cellWidth: 55 } },
+    headStyles: { fillColor: [37, 99, 235] },
   });
 
-  const detail = row.detail || {};
-  const detailRows = Object.entries(detail);
-  if (detailRows.length) {
-    autoTable(doc, {
-      startY: doc.lastAutoTable.finalY + 8,
-      head: [['Field', 'Value']],
-      body: detailRows,
-      styles: { fontSize: 8, cellPadding: 3 },
-      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 55 } },
-      headStyles: { fillColor: [37, 99, 235] },
-    });
-  } else {
-    doc.setFontSize(9);
+  let finalY = doc.lastAutoTable.finalY;
+  if (!hasDetail) {
+    doc.setFontSize(8);
     doc.setTextColor(150);
-    doc.text('No detail fetched yet for this lot — bookmark it, then re-run push_to_supabase.py to fetch full details.', 14, doc.lastAutoTable.finalY + 10);
+    doc.text('Full catalogue detail not synced yet for this lot — showing our own scan summary instead.', 14, finalY + 8);
+    finalY += 8;
   }
 
-  const finalY = (doc.lastAutoTable && doc.lastAutoTable.finalY) || 40;
   doc.setFontSize(7);
   doc.setTextColor(150);
   doc.text('Generated locally from publicly scraped IREPS lot data. This is not the official IREPS catalogue document.', 14, finalY + 10);
@@ -165,50 +178,63 @@ function downloadCataloguePdf(row) {
   doc.save(`lot_${row.lot_no}_catalogue.pdf`);
 }
 
-function printSelected(rows) {
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+// Generic printable-table window, used for both the Lots and Watchlist
+// "print all / print selected" actions -- same look, different column sets.
+function printRows(title, columns, rows) {
   const win = window.open('', '_blank');
-  const trs = rows.map(r => `
-    <tr>
-      <td>${r.railway}</td><td>${r.depot}</td><td>${describeLocation(r.railway, r.depot)}</td>
-      <td>${r.lot_no}</td><td>${r.qty_unit}</td><td>${r.category}</td><td>${r.min_incr}</td>
-      <td>${r.material_descr}</td><td>${r.publish_date}</td><td>${r.next_auction || ''}</td>
-    </tr>`).join('');
-  win.document.write(`<!DOCTYPE html><html><head><title>Selected Lots</title><style>
+  const thead = columns.map(c => `<th>${escapeHtml(c.header)}</th>`).join('');
+  const trs = rows.map(r => `<tr>${columns.map(c => `<td>${escapeHtml(c.get(r))}</td>`).join('')}</tr>`).join('');
+  win.document.write(`<!DOCTYPE html><html><head><title>${escapeHtml(title)}</title><style>
     body{font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#222;margin:1.5rem}
     h1{font-size:1.2rem} table{border-collapse:collapse;width:100%;font-size:0.8rem}
     th,td{border:1px solid #999;padding:0.4rem 0.6rem;text-align:left;vertical-align:top}
     th{background:#eee}
     </style></head><body>
-    <h1>Selected Lots (${rows.length})</h1>
-    <table><tr><th>Railway</th><th>Depot</th><th>Location</th><th>Lot No</th><th>Qty/Unit</th>
-    <th>Category</th><th>Min Incr</th><th>Material Descr.</th><th>Publish Date</th><th>Next Auction</th></tr>
-    ${trs}</table>
+    <h1>${escapeHtml(title)} (${rows.length})</h1>
+    <table><tr>${thead}</tr>${trs}</table>
     <script>window.onload = () => window.print();</script>
     </body></html>`);
   win.document.close();
 }
 
+const LOT_PRINT_COLUMNS = [
+  { header: 'Railway', get: r => r.railway },
+  { header: 'Depot', get: r => r.depot },
+  { header: 'Location', get: r => r.location || describeLocation(r.railway, r.depot) },
+  { header: 'Lot No', get: r => r.lot_no },
+  { header: 'Qty/Unit', get: r => r.qty_unit },
+  { header: 'Category', get: r => r.category },
+  { header: 'Min Incr', get: r => r.min_incr },
+  { header: 'Material Descr.', get: r => r.material_descr },
+  { header: 'Next Auction', get: r => r.next_auction || '' },
+];
+
+const WATCHLIST_PRINT_COLUMNS = [
+  ...LOT_PRINT_COLUMNS,
+  { header: 'Status', get: r => r.watch_status || 'watching' },
+  { header: 'Team', get: r => r.team || '' },
+  { header: 'Target Rate', get: r => r.target_rate || '' },
+  { header: 'Landing Cost', get: (r) => { const c = landingCost(r); return c === null ? '' : c.toFixed(2); } },
+];
+
 function printLotDetail(row) {
-  const summary = [
-    ['Railway / Depot', `${row.railway} / ${row.depot}`],
-    ['Location', describeLocation(row.railway, row.depot)],
-    ['Category', row.category],
-    ['Qty / Unit', row.qty_unit],
-    ['Min Increment', row.min_incr],
-    ['Publish Date', row.publish_date],
-    ['Next Auction', row.next_auction || '-'],
-  ];
-  const detailRows = Object.entries(row.detail || {});
-  const rowsHtml = (rows) => rows.map(([k, v]) => `<tr><td><b>${k}</b></td><td>${v}</td></tr>`).join('');
+  const hasDetail = !!(row.detail && Object.keys(row.detail).length);
+  const rowsHtml = buildDetailRows(row).map(([k, v]) => `<tr><td><b>${escapeHtml(k)}</b></td><td>${escapeHtml(v)}</td></tr>`).join('');
   const win = window.open('', '_blank');
-  win.document.write(`<!DOCTYPE html><html><head><title>Lot ${row.lot_no}</title><style>
+  win.document.write(`<!DOCTYPE html><html><head><title>Lot ${escapeHtml(row.lot_no)}</title><style>
     body{font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#222;margin:1.5rem}
     h1{font-size:1.2rem} table{border-collapse:collapse;width:100%;font-size:0.85rem;margin-bottom:1rem}
     td{border:1px solid #999;padding:0.4rem 0.6rem;text-align:left;vertical-align:top}
     </style></head><body>
-    <h1>Lot ${row.lot_no} - ${row.material_descr}</h1>
-    <table>${rowsHtml(summary)}</table>
-    ${detailRows.length ? `<table>${rowsHtml(detailRows)}</table>` : '<p><i>No extended detail synced yet.</i></p>'}
+    <h1>Lot ${escapeHtml(row.lot_no)} - ${escapeHtml(row.material_descr)}</h1>
+    <table>${rowsHtml}</table>
+    ${!hasDetail ? '<p><i>Full catalogue detail not synced yet for this lot — showing our own scan summary instead.</i></p>' : ''}
     <script>window.onload = () => window.print();</script>
     </body></html>`);
   win.document.close();
@@ -217,16 +243,8 @@ function printLotDetail(row) {
 // ── Lot detail modal ────────────────────────────────────────────────────
 function LotDetailModal({ row, onClose }) {
   if (!row) return null;
-  const summary = [
-    ['Railway / Depot', `${row.railway} / ${row.depot}`],
-    ['Location', describeLocation(row.railway, row.depot)],
-    ['Category', row.category],
-    ['Qty / Unit', row.qty_unit],
-    ['Min Increment', row.min_incr],
-    ['Publish Date', row.publish_date],
-    ['Next Auction', row.next_auction || '-'],
-  ];
-  const detailRows = Object.entries(row.detail || {});
+  const rows = buildDetailRows(row);
+  const hasDetail = !!(row.detail && Object.keys(row.detail).length);
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 'min(560px, 94vw)', maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
@@ -236,30 +254,21 @@ function LotDetailModal({ row, onClose }) {
         </div>
         <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 14 }}>{row.material_descr}</div>
 
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginBottom: 14 }}>
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6 }}>
+          {hasDetail ? 'Catalogue detail (same as "View on IREPS")' : 'Summary'}
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginBottom: 8 }}>
           <tbody>
-            {summary.map(([k, v]) => (
+            {rows.map(([k, v]) => (
               <tr key={k} style={{ borderTop: `1px solid ${C.bdr}` }}>
                 <td style={{ ...td, fontWeight: 600, width: 140 }}>{k}</td><td style={td}>{v}</td>
               </tr>
             ))}
           </tbody>
         </table>
-
-        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6 }}>Extended detail</div>
-        {detailRows.length ? (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 14 }}>
-            <tbody>
-              {detailRows.map(([k, v]) => (
-                <tr key={k} style={{ borderTop: `1px solid ${C.bdr}` }}>
-                  <td style={{ ...td, fontWeight: 600, width: 140 }}>{k}</td><td style={td}>{v}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
+        {!hasDetail && (
           <div style={{ fontSize: 12, color: C.sub, marginBottom: 14 }}>
-            No extended detail synced yet — star this lot and it'll be fetched on the next daily autoscan.
+            Full catalogue detail not synced yet for this lot — it'll be fetched on the next daily scan.
           </div>
         )}
 
@@ -1078,6 +1087,8 @@ export default function App() {
   const [status, setStatus] = useState('active');
   const [changeTag, setChangeTag] = useState('');
   const [selected, setSelected] = useState(new Set());
+  const [selectedWatch, setSelectedWatch] = useState(new Set());
+  const [visibleCols, setVisibleCols] = useState(loadVisibleCols);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [keywords, setKeywords] = useState([]);
@@ -1093,7 +1104,7 @@ export default function App() {
   const [editLifting, setEditLifting] = useState(undefined); // undefined = modal closed, null = new
   const [saleOrders, setSaleOrders] = useState([]);
   const [editSaleOrder, setEditSaleOrder] = useState(undefined); // undefined = modal closed, null = new
-  const [activeTab, setActiveTab] = useState('lots');
+  const [activeTab, setActiveTab] = useState('dashboard');
 
   // Watchlisted IREPS lots + manually-tracked external lots, grouped by
   // category and ranked by landing cost within each group, so the cheapest
@@ -1119,6 +1130,38 @@ export default function App() {
     return Object.entries(byCategory).sort((a, b) => a[0].localeCompare(b[0]));
   }, [bookmarks, externalLots]);
 
+  // Dashboard: new lots (this scan) that match a saved keyword of interest.
+  const newKeywordMatches = useMemo(
+    () => keywordMatches.filter(r => r.change_tag === 'new'),
+    [keywordMatches]
+  );
+
+  // Dashboard: auctions (IREPS watchlist + external) we've marked ourselves
+  // down to participate in, soonest first.
+  const upcomingParticipating = useMemo(() => {
+    const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0);
+    const items = [
+      ...bookmarks.filter(b => b.watch_status === 'participating').map(b => ({
+        key: b.lot_no, source: 'IREPS', lot_no: b.lot_no, material_descr: b.material_descr,
+        when: b.next_auction || '-', days: daysToAuction(b.next_auction), row: b, kind: 'bookmark',
+      })),
+      ...externalLots.filter(e => e.watch_status === 'participating').map(e => {
+        const d = e.auction_date ? new Date(e.auction_date) : null;
+        return {
+          key: `ext-${e.id}`, source: e.source, lot_no: e.external_lot_no || '-', material_descr: e.title,
+          when: e.auction_date || '-', days: d ? Math.round((d - startOfToday) / 86400000) : null,
+          row: e, kind: 'external',
+        };
+      }),
+    ];
+    items.sort((a, b) => {
+      if (a.days === null) return 1;
+      if (b.days === null) return -1;
+      return a.days - b.days;
+    });
+    return items;
+  }, [bookmarks, externalLots]);
+
   useEffect(() => {
     if (!supabase) { setSession(null); return; }
     DB.getSession().then(setSession);
@@ -1133,7 +1176,7 @@ export default function App() {
         DB.fetchCategoryCounts(),
         DB.fetchBookmarkedLotNos(),
       ]);
-      setLots(rows.map(r => ({ ...r, location: describeLocation(r.railway, r.depot) })));
+      setLots(rows.map(r => ({ ...r, location: custodianLocation(r) })));
       setCategoryCounts(counts);
       setBookmarkedSet(bmSet);
     } catch (e) {
@@ -1146,7 +1189,7 @@ export default function App() {
   const loadBookmarks = useCallback(async () => {
     try {
       const rows = await DB.fetchBookmarks();
-      setBookmarks(rows.map(r => ({ ...r, location: describeLocation(r.railway, r.depot) })));
+      setBookmarks(rows.map(r => ({ ...r, location: custodianLocation(r) })));
     } catch (e) {
       setErr(e.message || String(e));
     }
@@ -1213,7 +1256,7 @@ export default function App() {
   useEffect(() => {
     if (!session || !keywords.length) { setKeywordMatches([]); return; }
     DB.fetchKeywordMatches(keywords.map(k => k.keyword))
-      .then(rows => setKeywordMatches(rows.map(r => ({ ...r, location: describeLocation(r.railway, r.depot) }))))
+      .then(rows => setKeywordMatches(rows.map(r => ({ ...r, location: custodianLocation(r) }))))
       .catch(e => setErr(e.message || String(e)));
   }, [session, keywords]);
 
@@ -1336,6 +1379,7 @@ export default function App() {
   const landingItemCount = landingComparison.reduce((n, [, items]) => n + items.length, 0);
 
   const TABS = [
+    { id: 'dashboard', label: 'Dashboard' },
     { id: 'lots', label: 'Lots' },
     { id: 'keywords', label: 'Keyword Watch' },
     { id: 'watchlist', label: 'Watchlist', count: bookmarks.length },
@@ -1350,7 +1394,7 @@ export default function App() {
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: '-apple-system,Segoe UI,Arial,sans-serif', color: C.txt }}>
       <header className="app-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 22px', background: C.surf, borderBottom: `1px solid ${C.bdr}` }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>🚂 IREPS Tracker</div>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>🚂 Auction Tracker</div>
           <div style={{ fontSize: 11, color: C.sub }}>
             {latestScan ? `Last scan: ${new Date(latestScan.finished_at).toLocaleString()} · ${latestScan.total_lots} lots (${latestScan.new_count} new, ${latestScan.updated_count} updated, ${latestScan.expired_count} expired)` : 'No scan data yet'}
           </div>
@@ -1375,8 +1419,70 @@ export default function App() {
           ))}
         </nav>
         <div className="app-content" style={{ padding: 20, flex: 1, minWidth: 0 }}>
+      {activeTab === 'dashboard' && (<>
+        <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>New lots matching your keywords</h2>
+        <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Found in the most recent scan — from your saved keywords on the Keyword Watch tab.</div>
+        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto', marginBottom: 26 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: '#fafafa', textAlign: 'left' }}>
+                <th style={th}>Lot No</th><th style={th}>Location</th><th style={th}>Category</th>
+                <th style={th}>Material Descr.</th><th style={th}>Next Auction</th><th style={th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {newKeywordMatches.map(row => (
+                <tr key={row.lot_no} style={{ borderTop: `1px solid ${C.bdr}` }}>
+                  <td style={td}>{row.lot_no}</td>
+                  <td style={td}>{row.location}</td>
+                  <td style={td}>{row.category}</td>
+                  <td style={{ ...clipTd, maxWidth: 320 }} title={row.material_descr}>{row.material_descr}</td>
+                  <td style={td}>{row.next_auction}</td>
+                  <td style={td}><button onClick={() => setDetailLot(row)} style={smallBtn}>Details</button></td>
+                </tr>
+              ))}
+              {!newKeywordMatches.length && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: C.sub }}>No new lots from the last scan match your saved keywords.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Upcoming auctions you're participating in</h2>
+        <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Watchlist / external lots marked "participating", soonest first.</div>
+        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: '#fafafa', textAlign: 'left' }}>
+                <th style={th}>Source</th><th style={th}>Lot No</th><th style={th}>Material Descr.</th>
+                <th style={th}>Auction</th><th style={th}>Days To</th><th style={th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {upcomingParticipating.map(item => (
+                <tr key={item.key} style={{ borderTop: `1px solid ${C.bdr}` }}>
+                  <td style={td}>{item.source}</td>
+                  <td style={td}>{item.lot_no}</td>
+                  <td style={{ ...clipTd, maxWidth: 320 }} title={item.material_descr}>{item.material_descr}</td>
+                  <td style={td}>{item.when}</td>
+                  <td style={td}>{formatDaysTo(item.days)}</td>
+                  <td style={td}>
+                    {item.kind === 'bookmark'
+                      ? <button onClick={() => setDetailLot(item.row)} style={smallBtn}>Details</button>
+                      : <button onClick={() => setEditExternalLot(item.row)} style={smallBtn}>Edit</button>}
+                  </td>
+                </tr>
+              ))}
+              {!upcomingParticipating.length && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: C.sub }}>Nothing marked "participating" yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </>)}
+
       {activeTab === 'keywords' && (<>
         <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Keyword Watch</h2>
+        <div style={{ fontSize: 12, color: C.sub, marginBottom: 10 }}>
+          Saved permanently to your account — these keywords persist across sign-ins and devices, and the matches below are re-checked after every scan.
+        </div>
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6 }}>Saved keywords</div>
         <form onSubmit={addKeyword} style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           {keywords.map(k => (
             <span key={k.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, padding: '4px 6px 4px 10px', borderRadius: 999, background: `${C.blue}1a`, color: C.blue }}>
@@ -1389,28 +1495,33 @@ export default function App() {
           <button type="submit" style={smallBtn}>Add</button>
         </form>
 
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6 }}>Matches</div>
         {keywords.length > 0 && (
           <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto', marginBottom: 26 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
               <thead>
                 <tr style={{ background: '#fafafa', textAlign: 'left' }}>
-                  <th style={th}>Lot No</th><th style={th}>Location</th><th style={th}>Category</th>
+                  <th style={th}>Railway</th><th style={th}>Depot</th><th style={th}>Location</th>
+                  <th style={th}>Lot No</th><th style={th}>Qty/Unit</th><th style={th}>Category</th>
                   <th style={th}>Material Descr.</th><th style={th}>Next Auction</th><th style={th}>Days To</th><th style={th}>Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {keywordMatches.map(row => (
                   <tr key={row.lot_no} style={{ borderTop: `1px solid ${C.bdr}` }}>
-                    <td style={td}>{row.lot_no}</td>
+                    <td style={td}>{row.railway}</td>
+                    <td style={td}>{row.depot}</td>
                     <td style={td}>{row.location}</td>
+                    <td style={td}>{row.lot_no}</td>
+                    <td style={td}>{row.qty_unit}</td>
                     <td style={td}>{row.category}</td>
-                    <td style={{ ...td, maxWidth: 320 }}>{row.material_descr}</td>
+                    <td style={{ ...clipTd, maxWidth: 320 }} title={row.material_descr}>{row.material_descr}</td>
                     <td style={td}>{row.next_auction}</td>
                     <td style={td}>{formatDaysTo(daysToAuction(row.next_auction))}</td>
                     <td style={td}><button onClick={() => setDetailLot(row)} style={smallBtn}>Details</button></td>
                   </tr>
                 ))}
-                {!keywordMatches.length && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: C.sub }}>No active lots match your keywords yet.</td></tr>}
+                {!keywordMatches.length && <tr><td colSpan={10} style={{ ...td, textAlign: 'center', color: C.sub }}>No active lots match your keywords yet.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -1439,20 +1550,32 @@ export default function App() {
           <button onClick={loadLots} style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: C.blue, color: '#fff', fontSize: 13, cursor: 'pointer' }}>
             {loading ? 'Loading…' : 'Refresh'}
           </button>
-          <button disabled={!selected.size} onClick={() => printSelected(lots.filter(l => selected.has(l.lot_no)))}
+          <button disabled={!selected.size} onClick={() => printRows('Selected Lots', LOT_PRINT_COLUMNS, lots.filter(l => selected.has(l.lot_no)))}
             style={{ padding: '8px 16px', borderRadius: 6, border: `1px solid ${C.bdr}`, background: '#fff', fontSize: 13, cursor: selected.size ? 'pointer' : 'default', opacity: selected.size ? 1 : 0.5 }}>
             Print selected ({selected.size})
           </button>
+          <button disabled={!lots.length} onClick={() => printRows('All Lots', LOT_PRINT_COLUMNS, lots)}
+            style={{ padding: '8px 16px', borderRadius: 6, border: `1px solid ${C.bdr}`, background: '#fff', fontSize: 13, cursor: lots.length ? 'pointer' : 'default', opacity: lots.length ? 1 : 0.5 }}>
+            Print all ({lots.length})
+          </button>
+          <ColumnPicker visible={visibleCols} onChange={setVisibleCols} />
         </div>
 
         <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
-                <th style={th}></th><th style={th}>★</th><th style={th}>Railway</th><th style={th}>Depot</th>
-                <th style={th}>Location</th><th style={th}>Lot No</th><th style={th}>Qty/Unit</th>
-                <th style={th}>Category</th><th style={th}>Material Descr.</th><th style={th}>Publish Date</th>
-                <th style={th}>Next Auction</th><th style={th}>Tag</th><th style={th}>Actions</th>
+                <th style={th}></th><th style={th}>★</th>
+                {visibleCols.railway && <th style={th}>Railway</th>}
+                {visibleCols.depot && <th style={th}>Depot</th>}
+                {visibleCols.location && <th style={th}>Location</th>}
+                <th style={th}>Lot No</th>
+                {visibleCols.qty_unit && <th style={th}>Qty/Unit</th>}
+                {visibleCols.category && <th style={th}>Category</th>}
+                {visibleCols.material_descr && <th style={th}>Material Descr.</th>}
+                {visibleCols.next_auction && <th style={th}>Next Auction</th>}
+                {visibleCols.tag && <th style={th}>Tag</th>}
+                <th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1462,45 +1585,65 @@ export default function App() {
                   <td style={td}>
                     <button onClick={() => toggleBookmark(row.lot_no)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 15, color: bookmarkedSet.has(row.lot_no) ? C.amber : C.bdr }}>★</button>
                   </td>
-                  <td style={td}>{row.railway}</td>
-                  <td style={td}>{row.depot}</td>
-                  <td style={td}>{row.location}</td>
+                  {visibleCols.railway && <td style={td}>{row.railway}</td>}
+                  {visibleCols.depot && <td style={td}>{row.depot}</td>}
+                  {visibleCols.location && <td style={td}>{row.location}</td>}
                   <td style={td}>{row.lot_no}</td>
-                  <td style={td}>{row.qty_unit}</td>
-                  <td style={td}>{row.category}</td>
-                  <td style={{ ...td, maxWidth: 320 }}>{row.material_descr}</td>
-                  <td style={td}>{row.publish_date}</td>
-                  <td style={td}>{row.next_auction}</td>
-                  <td style={td}>{row.change_tag && <Badge text={row.change_tag} color={TAG_COLOR[row.change_tag] || C.sub} />}</td>
+                  {visibleCols.qty_unit && <td style={td}>{row.qty_unit}</td>}
+                  {visibleCols.category && <td style={td}>{row.category}</td>}
+                  {visibleCols.material_descr && <td style={{ ...clipTd, maxWidth: 320 }} title={row.material_descr}>{row.material_descr}</td>}
+                  {visibleCols.next_auction && <td style={td}>{row.next_auction}</td>}
+                  {visibleCols.tag && <td style={td}>{row.change_tag && <Badge text={row.change_tag} color={TAG_COLOR[row.change_tag] || C.sub} />}</td>}
                   <td style={td}>
                     <button onClick={() => setDetailLot(row)} style={smallBtn}>Details</button>{' '}
                     <button onClick={() => downloadCataloguePdf(row)} style={smallBtn}>PDF</button>
                   </td>
                 </tr>
               ))}
-              {!lots.length && !loading && <tr><td colSpan={13} style={{ ...td, textAlign: 'center', color: C.sub }}>No lots match these filters.</td></tr>}
+              {!lots.length && !loading && <tr><td colSpan={4 + LOT_COLUMNS.filter(c => visibleCols[c.id] !== false).length} style={{ ...td, textAlign: 'center', color: C.sub }}>No lots match these filters.</td></tr>}
             </tbody>
           </table>
         </div>
       </>)}
 
       {activeTab === 'watchlist' && (<>
-        <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Watchlist ({bookmarks.length})</h2>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, margin: '0 0 10px' }}>
+          <h2 style={{ fontSize: 15, margin: 0 }}>Watchlist ({bookmarks.length})</h2>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button disabled={!selectedWatch.size} onClick={() => printRows('Selected Watchlist Lots', WATCHLIST_PRINT_COLUMNS, bookmarks.filter(b => selectedWatch.has(b.lot_no)))}
+              style={{ padding: '8px 16px', borderRadius: 6, border: `1px solid ${C.bdr}`, background: '#fff', fontSize: 13, cursor: selectedWatch.size ? 'pointer' : 'default', opacity: selectedWatch.size ? 1 : 0.5 }}>
+              Print selected ({selectedWatch.size})
+            </button>
+            <button disabled={!bookmarks.length} onClick={() => printRows('Watchlist', WATCHLIST_PRINT_COLUMNS, bookmarks)}
+              style={{ padding: '8px 16px', borderRadius: 6, border: `1px solid ${C.bdr}`, background: '#fff', fontSize: 13, cursor: bookmarks.length ? 'pointer' : 'default', opacity: bookmarks.length ? 1 : 0.5 }}>
+              Print all ({bookmarks.length})
+            </button>
+          </div>
+        </div>
         <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
-                <th style={th}>Lot No</th><th style={th}>Location</th><th style={th}>Material Descr.</th>
+                <th style={th}>
+                  <input type="checkbox" checked={bookmarks.length > 0 && selectedWatch.size === bookmarks.length}
+                    onChange={() => setSelectedWatch(s => s.size === bookmarks.length ? new Set() : new Set(bookmarks.map(b => b.lot_no)))} />
+                </th>
+                <th style={th}>Railway</th><th style={th}>Depot</th><th style={th}>Lot No</th>
+                <th style={th}>Location</th><th style={th}>Qty/Unit</th><th style={th}>Category</th>
+                <th style={th}>Material Descr.</th><th style={th}>Next Auction</th>
                 <th style={th}>Status</th><th style={th}>Team</th><th style={th}>Target Rate</th>
                 <th style={th}>Landing Cost</th><th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {bookmarks.map(row => (
-                <WatchlistRow key={row.lot_no} row={row} onRemove={() => toggleBookmark(row.lot_no)} onDetails={() => setDetailLot(row)} onEdit={() => setEditWatchRow(row)}
+                <WatchlistRow key={row.lot_no} row={row}
+                  selected={selectedWatch.has(row.lot_no)}
+                  onToggleSelect={() => setSelectedWatch(s => { const n = new Set(s); n.has(row.lot_no) ? n.delete(row.lot_no) : n.add(row.lot_no); return n; })}
+                  onRemove={() => toggleBookmark(row.lot_no)} onDetails={() => setDetailLot(row)} onEdit={() => setEditWatchRow(row)}
                   onAward={() => setEditAward({ source: 'IREPS', lot_no: row.lot_no, title: row.material_descr, location: row.location, category: row.category, qty_unit: row.qty_unit, sold_rate: row.sold_rate })} />
               ))}
-              {!bookmarks.length && <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: C.sub }}>Nothing on your watchlist yet — star a lot above.</td></tr>}
+              {!bookmarks.length && <tr><td colSpan={14} style={{ ...td, textAlign: 'center', color: C.sub }}>Nothing on your watchlist yet — star a lot above.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1548,7 +1691,7 @@ export default function App() {
                   <td style={{ ...td, fontWeight: i === 0 ? 600 : 400, color: i === 0 ? C.txt : C.sub }}>{i === 0 ? cat : ''}</td>
                   <td style={td}>{source}</td>
                   <td style={td}>{row.lot_no || row.external_lot_no || '-'}</td>
-                  <td style={{ ...td, maxWidth: 260 }}>{row.material_descr || row.title}</td>
+                  <td style={{ ...clipTd, maxWidth: 260 }} title={row.material_descr || row.title}>{row.material_descr || row.title}</td>
                   <td style={td}>{row.target_rate || '-'}</td>
                   <td style={td}>{row.lifting_expense || '-'}</td>
                   <td style={td}>{row.transport_expense || '-'}</td>
@@ -1729,13 +1872,19 @@ function ExternalLotRow({ row, onRemove, onEdit, onAward }) {
   );
 }
 
-function WatchlistRow({ row, onRemove, onDetails, onEdit, onAward }) {
+function WatchlistRow({ row, selected, onToggleSelect, onRemove, onDetails, onEdit, onAward }) {
   const cost = landingCost(row);
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
+      <td style={td}><input type="checkbox" checked={!!selected} onChange={onToggleSelect} /></td>
+      <td style={td}>{row.railway}</td>
+      <td style={td}>{row.depot}</td>
       <td style={td}>{row.lot_no}</td>
       <td style={td}>{row.location}</td>
-      <td style={{ ...td, maxWidth: 240 }}>{row.material_descr}</td>
+      <td style={td}>{row.qty_unit}</td>
+      <td style={td}>{row.category}</td>
+      <td style={{ ...clipTd, maxWidth: 240 }} title={row.material_descr}>{row.material_descr}</td>
+      <td style={td}>{row.next_auction}</td>
       <td style={td}><Badge text={row.watch_status || 'watching'} color={WATCH_STATUS_COLOR[row.watch_status] || C.sub} /></td>
       <td style={td}>{row.team || '-'}</td>
       <td style={td}>{row.target_rate || '-'}</td>
@@ -1754,4 +1903,57 @@ function WatchlistRow({ row, onRemove, onDetails, onEdit, onAward }) {
 
 const th = { padding: '8px 10px', fontSize: 11, fontWeight: 600, color: C.sub, whiteSpace: 'nowrap' };
 const td = { padding: '7px 10px', verticalAlign: 'top' };
+// Single-line truncation with the full text available on hover (native title
+// tooltip) -- used for description/title columns that would otherwise wrap
+// and blow up row heights.
+const clipTd = { ...td, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+
+// ── Lots column visibility (per-browser, via localStorage) ─────────────
+const LOT_COLUMNS = [
+  { id: 'railway', label: 'Railway' },
+  { id: 'depot', label: 'Depot' },
+  { id: 'location', label: 'Location' },
+  { id: 'qty_unit', label: 'Qty/Unit' },
+  { id: 'category', label: 'Category' },
+  { id: 'material_descr', label: 'Material Descr.' },
+  { id: 'next_auction', label: 'Next Auction' },
+  { id: 'tag', label: 'Tag' },
+];
+const LOT_COLUMNS_STORAGE_KEY = 'auctionTracker.lotsVisibleColumns';
+
+function loadVisibleCols() {
+  const defaults = Object.fromEntries(LOT_COLUMNS.map(c => [c.id, true]));
+  try {
+    const saved = JSON.parse(localStorage.getItem(LOT_COLUMNS_STORAGE_KEY) || '{}');
+    return { ...defaults, ...saved };
+  } catch {
+    return defaults;
+  }
+}
+
+function ColumnPicker({ visible, onChange }) {
+  const [open, setOpen] = useState(false);
+  const toggle = (id) => {
+    const next = { ...visible, [id]: !visible[id] };
+    onChange(next);
+    try { localStorage.setItem(LOT_COLUMNS_STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  };
+  return (
+    <div style={{ position: 'relative' }}>
+      <button onClick={() => setOpen(o => !o)} style={{ padding: '8px 16px', borderRadius: 6, border: `1px solid ${C.bdr}`, background: '#fff', fontSize: 13, cursor: 'pointer' }}>
+        Columns ▾
+      </button>
+      {open && (
+        <div onMouseLeave={() => setOpen(false)} style={{ position: 'absolute', top: '100%', right: 0, marginTop: 4, background: C.surf, border: `1px solid ${C.bdr}`, borderRadius: 8, boxShadow: '0 6px 20px rgba(0,0,0,0.12)', padding: 10, zIndex: 20, minWidth: 170 }}>
+          {LOT_COLUMNS.map(c => (
+            <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, padding: '4px 2px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              <input type="checkbox" checked={visible[c.id] !== false} onChange={() => toggle(c.id)} />
+              {c.label}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 const smallBtn = { padding: '4px 9px', borderRadius: 5, border: `1px solid ${C.bdr}`, background: '#fff', fontSize: 11, cursor: 'pointer' };

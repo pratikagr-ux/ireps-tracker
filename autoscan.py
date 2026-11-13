@@ -10,9 +10,11 @@ same change_tag semantics as before), and pushes the result straight back --
 so Supabase is the single source of truth and this script can run from a
 clean checkout (e.g. in CI) every time.
 
-It also syncs the per-lot detail-popup fields (`lots.detail` jsonb) for any
-lot currently on someone's watchlist/bookmarks, so the web app's client-side
-PDF catalogue keeps working without a live server-side proxy to ireps.gov.in
+It also syncs the per-lot detail-popup fields (`lots.detail` jsonb) for every
+active lot that doesn't have them yet or just changed (plus anything anyone
+has bookmarked, regardless of status), so the web app's Location column and
+its detail view/PDF/print stay accurate for lots in general, not just
+bookmarked ones -- without a live server-side proxy to ireps.gov.in
 (GitHub Pages is static, and a browser fetch straight to ireps.gov.in would
 hit CORS).
 
@@ -250,22 +252,51 @@ def fetch_watchlisted_lots(base_url: str, headers: dict) -> list[dict]:
     return out
 
 
-def push_bookmarked_detail(base_url: str, headers: dict, max_detail: int | None) -> None:
-    bookmarked = fetch_watchlisted_lots(base_url, headers)
+def fetch_lots_needing_detail(base_url: str, headers: dict) -> list[dict]:
+    """lot_no/lot_id pairs for active lots whose catalogue detail (the same
+    page "View on IREPS" opens) hasn't been synced yet, or was just added/
+    changed by this scan -- so the web app's Location column and detail
+    view/PDF/print stay accurate for every active lot, not only bookmarked
+    ones, without re-fetching detail for lots that haven't changed."""
+    resp = requests.get(
+        f"{base_url}/rest/v1/lots",
+        headers=headers,
+        params={
+            "select": "lot_no,lot_id",
+            "status": "eq.active",
+            "or": "(detail.is.null,change_tag.in.(new,updated))",
+            "limit": "5000",
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return [{"lot_no": r["lot_no"], "lot_id": r["lot_id"]} for r in resp.json() if r.get("lot_id")]
+
+
+def push_lot_detail(base_url: str, headers: dict, max_detail: int | None) -> None:
+    watchlisted = fetch_watchlisted_lots(base_url, headers)
+    needing_detail = fetch_lots_needing_detail(base_url, headers)
+    targets: list[dict] = []
+    seen = set()
+    for b in watchlisted + needing_detail:  # bookmarked lots always win a spot within max_detail
+        if b["lot_no"] in seen:
+            continue
+        seen.add(b["lot_no"])
+        targets.append(b)
     if max_detail is not None:
-        bookmarked = bookmarked[:max_detail]
-    if not bookmarked:
-        print("  no bookmarked lots to fetch detail for", file=sys.stderr)
+        targets = targets[:max_detail]
+    if not targets:
+        print("  no lots need detail fetched", file=sys.stderr)
         return
 
     session = requests.Session()
-    print(f"  fetching detail for {len(bookmarked)} bookmarked lot(s)...", file=sys.stderr)
-    for i, b in enumerate(bookmarked, 1):
+    print(f"  fetching detail for {len(targets)} lot(s) ({len(watchlisted)} bookmarked)...", file=sys.stderr)
+    for i, b in enumerate(targets, 1):
         try:
             html = ireps_core.fetch_lot_detail(session, b["lot_id"])
             detail = ireps_core.parse_lot_detail(html)
         except Exception as exc:  # noqa: BLE001
-            print(f"  [{i}/{len(bookmarked)}] lot {b['lot_no']}: FAILED ({exc})", file=sys.stderr)
+            print(f"  [{i}/{len(targets)}] lot {b['lot_no']}: FAILED ({exc})", file=sys.stderr)
             continue
         resp = requests.patch(
             f"{base_url}/rest/v1/lots",
@@ -275,9 +306,9 @@ def push_bookmarked_detail(base_url: str, headers: dict, max_detail: int | None)
             timeout=30,
         )
         if resp.status_code >= 300:
-            print(f"  [{i}/{len(bookmarked)}] lot {b['lot_no']}: PATCH failed {resp.status_code} {resp.text[:200]}", file=sys.stderr)
+            print(f"  [{i}/{len(targets)}] lot {b['lot_no']}: PATCH failed {resp.status_code} {resp.text[:200]}", file=sys.stderr)
             continue
-        print(f"  [{i}/{len(bookmarked)}] lot {b['lot_no']}: detail synced", file=sys.stderr)
+        print(f"  [{i}/{len(targets)}] lot {b['lot_no']}: detail synced", file=sys.stderr)
 
 
 def main():
@@ -286,8 +317,8 @@ def main():
     parser.add_argument("--depot-id", default="-1", help="Depot id to restrict to (default: all, -1)")
     parser.add_argument("--max-pages", type=int, default=None, help="Stop after N pages (for testing)")
     parser.add_argument("--delay", type=float, default=0.3, help="Seconds to wait between page requests")
-    parser.add_argument("--skip-detail", action="store_true", help="Don't fetch/push per-lot detail for bookmarked lots")
-    parser.add_argument("--max-detail", type=int, default=None, help="Limit how many bookmarked lots to fetch detail for (for testing)")
+    parser.add_argument("--skip-detail", action="store_true", help="Don't fetch/push per-lot catalogue detail")
+    parser.add_argument("--max-detail", type=int, default=None, help="Limit how many lots to fetch detail for (for testing)")
     args = parser.parse_args()
 
     env = load_env()
@@ -312,8 +343,8 @@ def main():
     push_scan_summary(base_url, headers, started_at, finished_at, summary)
 
     if not args.skip_detail:
-        print("Syncing detail for watchlisted lots...", file=sys.stderr)
-        push_bookmarked_detail(base_url, headers, args.max_detail)
+        print("Syncing catalogue detail...", file=sys.stderr)
+        push_lot_detail(base_url, headers, args.max_detail)
 
     print("Done.", file=sys.stderr)
 
