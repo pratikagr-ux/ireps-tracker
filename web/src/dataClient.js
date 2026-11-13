@@ -112,3 +112,37 @@ export async function updateBookmark(lotNo, fields) {
   const { error } = await supabase.from('bookmarks').update(fields).eq('lot_no', lotNo);
   if (error) throw error;
 }
+
+// ── Keywords (per signed-in user, RLS-scoped) ───────────────────────────
+export async function fetchKeywords() {
+  const { data, error } = await supabase.from('keywords').select('*').order('created_at', { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addKeyword(keyword) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (!userId) throw new Error('Not signed in');
+  const { error } = await supabase.from('keywords').insert({ user_id: userId, keyword });
+  if (error) throw error;
+}
+
+export async function removeKeyword(id) {
+  const { error } = await supabase.from('keywords').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// Active lots matching any saved keyword (material_descr/category ilike),
+// for the "Keyword Matches" view -- auctions of interest, regardless of
+// whether they've been starred yet.
+export async function fetchKeywordMatches(keywords) {
+  if (!keywords.length) return [];
+  let q = supabase.from('lots').select('*').eq('status', 'active').order('next_auction', { ascending: true }).limit(500);
+  const esc = (k) => k.replace(/[%,]/g, '');
+  const orExpr = keywords.map(k => `material_descr.ilike.%${esc(k)}%,category.ilike.%${esc(k)}%`).join(',');
+  q = q.or(orExpr);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}

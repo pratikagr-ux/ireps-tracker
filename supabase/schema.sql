@@ -71,3 +71,21 @@ alter table scans enable row level security;
 create policy "scans are publicly readable"
   on scans for select
   using (true);
+
+-- keywords: your saved watch-keywords for the "Keyword Matches" view (lots
+-- of interest, regardless of whether you've bookmarked them yet). Scoped to
+-- the signed-in user via RLS, same pattern as bookmarks.
+create table if not exists keywords (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  keyword text not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, keyword)
+);
+
+alter table keywords enable row level security;
+
+create policy "users manage their own keywords"
+  on keywords for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);

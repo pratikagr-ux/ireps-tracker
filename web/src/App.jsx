@@ -11,6 +11,9 @@ import autoTable from 'jspdf-autotable';
 import { supabase } from './supabaseClient.js';
 import * as DB from './dataClient.js';
 import { describeLocation } from './codes.js';
+import { daysToAuction, formatDaysTo } from './dates.js';
+
+const IREPS_LOT_URL = (lotId) => `https://ireps.gov.in/eps/auction/viewLotAnon.do?lotId=${encodeURIComponent(lotId)}`;
 
 const C = {
   bg: '#f7f7f8', surf: '#fff', bdr: '#e4e4e7', txt: '#18181b', sub: '#71717a',
@@ -158,6 +161,93 @@ function printSelected(rows) {
   win.document.close();
 }
 
+function printLotDetail(row) {
+  const summary = [
+    ['Railway / Depot', `${row.railway} / ${row.depot}`],
+    ['Location', describeLocation(row.railway, row.depot)],
+    ['Category', row.category],
+    ['Qty / Unit', row.qty_unit],
+    ['Min Increment', row.min_incr],
+    ['Publish Date', row.publish_date],
+    ['Next Auction', row.next_auction || '-'],
+  ];
+  const detailRows = Object.entries(row.detail || {});
+  const rowsHtml = (rows) => rows.map(([k, v]) => `<tr><td><b>${k}</b></td><td>${v}</td></tr>`).join('');
+  const win = window.open('', '_blank');
+  win.document.write(`<!DOCTYPE html><html><head><title>Lot ${row.lot_no}</title><style>
+    body{font-family:-apple-system,Segoe UI,Arial,sans-serif;color:#222;margin:1.5rem}
+    h1{font-size:1.2rem} table{border-collapse:collapse;width:100%;font-size:0.85rem;margin-bottom:1rem}
+    td{border:1px solid #999;padding:0.4rem 0.6rem;text-align:left;vertical-align:top}
+    </style></head><body>
+    <h1>Lot ${row.lot_no} - ${row.material_descr}</h1>
+    <table>${rowsHtml(summary)}</table>
+    ${detailRows.length ? `<table>${rowsHtml(detailRows)}</table>` : '<p><i>No extended detail synced yet.</i></p>'}
+    <script>window.onload = () => window.print();</script>
+    </body></html>`);
+  win.document.close();
+}
+
+// ── Lot detail modal ────────────────────────────────────────────────────
+function LotDetailModal({ row, onClose }) {
+  if (!row) return null;
+  const summary = [
+    ['Railway / Depot', `${row.railway} / ${row.depot}`],
+    ['Location', describeLocation(row.railway, row.depot)],
+    ['Category', row.category],
+    ['Qty / Unit', row.qty_unit],
+    ['Min Increment', row.min_incr],
+    ['Publish Date', row.publish_date],
+    ['Next Auction', row.next_auction || '-'],
+  ];
+  const detailRows = Object.entries(row.detail || {});
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 560, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 4 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Lot {row.lot_no}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 14 }}>{row.material_descr}</div>
+
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, marginBottom: 14 }}>
+          <tbody>
+            {summary.map(([k, v]) => (
+              <tr key={k} style={{ borderTop: `1px solid ${C.bdr}` }}>
+                <td style={{ ...td, fontWeight: 600, width: 140 }}>{k}</td><td style={td}>{v}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6 }}>Extended detail</div>
+        {detailRows.length ? (
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12, marginBottom: 14 }}>
+            <tbody>
+              {detailRows.map(([k, v]) => (
+                <tr key={k} style={{ borderTop: `1px solid ${C.bdr}` }}>
+                  <td style={{ ...td, fontWeight: 600, width: 140 }}>{k}</td><td style={td}>{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ fontSize: 12, color: C.sub, marginBottom: 14 }}>
+            No extended detail synced yet — star this lot and it'll be fetched on the next daily autoscan.
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <a href={IREPS_LOT_URL(row.lot_id)} target="_blank" rel="noopener noreferrer" style={{ ...smallBtn, textDecoration: 'none', display: 'inline-block' }}>
+            View on IREPS ↗
+          </a>
+          <button onClick={() => printLotDetail(row)} style={smallBtn}>Print</button>
+          <button onClick={() => downloadCataloguePdf(row)} style={smallBtn}>Download PDF</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main app ─────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
@@ -173,6 +263,10 @@ export default function App() {
   const [selected, setSelected] = useState(new Set());
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
+  const [keywords, setKeywords] = useState([]);
+  const [keywordMatches, setKeywordMatches] = useState([]);
+  const [newKeyword, setNewKeyword] = useState('');
+  const [detailLot, setDetailLot] = useState(null);
 
   useEffect(() => {
     if (!supabase) { setSession(null); return; }
@@ -207,13 +301,30 @@ export default function App() {
     }
   }, []);
 
+  const loadKeywords = useCallback(async () => {
+    try {
+      const rows = await DB.fetchKeywords();
+      setKeywords(rows);
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  }, []);
+
   useEffect(() => {
     if (session) {
       loadLots();
       loadBookmarks();
+      loadKeywords();
       DB.fetchLatestScan().then(setLatestScan).catch(() => {});
     }
-  }, [session, loadLots, loadBookmarks]);
+  }, [session, loadLots, loadBookmarks, loadKeywords]);
+
+  useEffect(() => {
+    if (!session || !keywords.length) { setKeywordMatches([]); return; }
+    DB.fetchKeywordMatches(keywords.map(k => k.keyword))
+      .then(rows => setKeywordMatches(rows.map(r => ({ ...r, location: describeLocation(r.railway, r.depot) }))))
+      .catch(e => setErr(e.message || String(e)));
+  }, [session, keywords]);
 
   if (!supabase) {
     return <div style={{ padding: 40, fontFamily: 'sans-serif' }}>
@@ -247,6 +358,28 @@ export default function App() {
     }
   };
 
+  const addKeyword = async (e) => {
+    e.preventDefault();
+    const kw = newKeyword.trim();
+    if (!kw) return;
+    try {
+      await DB.addKeyword(kw);
+      setNewKeyword('');
+      await loadKeywords();
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  };
+
+  const removeKeyword = async (id) => {
+    try {
+      await DB.removeKeyword(id);
+      await loadKeywords();
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  };
+
   return (
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: '-apple-system,Segoe UI,Arial,sans-serif', color: C.txt }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 22px', background: C.surf, borderBottom: `1px solid ${C.bdr}` }}>
@@ -262,6 +395,46 @@ export default function App() {
       {err && <div style={{ margin: 16, padding: 10, background: '#fef2f2', color: C.red, borderRadius: 6, fontSize: 13 }}>{err}</div>}
 
       <div style={{ padding: 20 }}>
+        <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Keyword Watch</h2>
+        <form onSubmit={addKeyword} style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          {keywords.map(k => (
+            <span key={k.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, padding: '4px 6px 4px 10px', borderRadius: 999, background: `${C.blue}1a`, color: C.blue }}>
+              {k.keyword}
+              <button type="button" onClick={() => removeKeyword(k.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.blue, fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
+            </span>
+          ))}
+          <input value={newKeyword} onChange={e => setNewKeyword(e.target.value)} placeholder="Add a keyword to watch…"
+            style={{ padding: '6px 10px', borderRadius: 6, border: `1px solid ${C.bdr}`, fontSize: 12.5, width: 200 }} />
+          <button type="submit" style={smallBtn}>Add</button>
+        </form>
+
+        {keywords.length > 0 && (
+          <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto', marginBottom: 26 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: '#fafafa', textAlign: 'left' }}>
+                  <th style={th}>Lot No</th><th style={th}>Location</th><th style={th}>Category</th>
+                  <th style={th}>Material Descr.</th><th style={th}>Next Auction</th><th style={th}>Days To</th><th style={th}>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {keywordMatches.map(row => (
+                  <tr key={row.lot_no} style={{ borderTop: `1px solid ${C.bdr}` }}>
+                    <td style={td}>{row.lot_no}</td>
+                    <td style={td}>{row.location}</td>
+                    <td style={td}>{row.category}</td>
+                    <td style={{ ...td, maxWidth: 320 }}>{row.material_descr}</td>
+                    <td style={td}>{row.next_auction}</td>
+                    <td style={td}>{formatDaysTo(daysToAuction(row.next_auction))}</td>
+                    <td style={td}><button onClick={() => setDetailLot(row)} style={smallBtn}>Details</button></td>
+                  </tr>
+                ))}
+                {!keywordMatches.length && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: C.sub }}>No active lots match your keywords yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
           <input placeholder="Search keyword(s), comma-separated…" value={search} onChange={e => setSearch(e.target.value)}
             style={{ flex: 1, minWidth: 220, padding: '8px 10px', borderRadius: 6, border: `1px solid ${C.bdr}`, fontSize: 13 }} />
@@ -296,7 +469,7 @@ export default function App() {
                 <th style={th}></th><th style={th}>★</th><th style={th}>Railway</th><th style={th}>Depot</th>
                 <th style={th}>Location</th><th style={th}>Lot No</th><th style={th}>Qty/Unit</th>
                 <th style={th}>Category</th><th style={th}>Material Descr.</th><th style={th}>Publish Date</th>
-                <th style={th}>Next Auction</th><th style={th}>Tag</th><th style={th}>Catalogue</th>
+                <th style={th}>Next Auction</th><th style={th}>Tag</th><th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -316,7 +489,10 @@ export default function App() {
                   <td style={td}>{row.publish_date}</td>
                   <td style={td}>{row.next_auction}</td>
                   <td style={td}>{row.change_tag && <Badge text={row.change_tag} color={TAG_COLOR[row.change_tag] || C.sub} />}</td>
-                  <td style={td}><button onClick={() => downloadCataloguePdf(row)} style={smallBtn}>PDF</button></td>
+                  <td style={td}>
+                    <button onClick={() => setDetailLot(row)} style={smallBtn}>Details</button>{' '}
+                    <button onClick={() => downloadCataloguePdf(row)} style={smallBtn}>PDF</button>
+                  </td>
                 </tr>
               ))}
               {!lots.length && !loading && <tr><td colSpan={13} style={{ ...td, textAlign: 'center', color: C.sub }}>No lots match these filters.</td></tr>}
@@ -336,18 +512,19 @@ export default function App() {
             </thead>
             <tbody>
               {bookmarks.map(row => (
-                <BookmarkRow key={row.lot_no} row={row} onSave={saveBookmark} onRemove={() => toggleBookmark(row.lot_no)} />
+                <BookmarkRow key={row.lot_no} row={row} onSave={saveBookmark} onRemove={() => toggleBookmark(row.lot_no)} onDetails={() => setDetailLot(row)} />
               ))}
               {!bookmarks.length && <tr><td colSpan={9} style={{ ...td, textAlign: 'center', color: C.sub }}>No bookmarks yet — star a lot above.</td></tr>}
             </tbody>
           </table>
         </div>
       </div>
+      {detailLot && <LotDetailModal row={detailLot} onClose={() => setDetailLot(null)} />}
     </div>
   );
 }
 
-function BookmarkRow({ row, onSave, onRemove }) {
+function BookmarkRow({ row, onSave, onRemove, onDetails }) {
   const [notes, setNotes] = useState(row.notes || '');
   const [target, setTarget] = useState(row.target_rate || '');
   const [secured, setSecured] = useState(row.secured_rate || '');
@@ -374,6 +551,7 @@ function BookmarkRow({ row, onSave, onRemove }) {
       <td style={td}><input value={expenses} onChange={e => setExpenses(e.target.value)} style={{ ...input, width: 80 }} /></td>
       <td style={td}>
         <button onClick={save} style={smallBtn}>Save</button>{' '}
+        <button onClick={onDetails} style={smallBtn}>Details</button>{' '}
         <button onClick={onRemove} style={{ ...smallBtn, color: C.red }}>Remove</button>{' '}
         <span style={{ fontSize: 11, color: C.sub }}>{status}</span>
       </td>
