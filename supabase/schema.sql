@@ -219,3 +219,35 @@ create policy "users manage their own lifted material"
   on lifted_material for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- Phase 8: sale_orders -- the disposition end of the flow: selling material
+-- you've lifted on to a buyer. award_id links back to awarded_lots when
+-- raised from there, same pattern as lifted_material.award_id. Scoped to
+-- the signed-in user via RLS.
+create table if not exists sale_orders (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  award_id bigint references awarded_lots(id) on delete set null,
+  order_no text,
+  buyer_name text not null,
+  buyer_contact text,
+  lot_no text,
+  title text not null,
+  qty text,
+  rate text,
+  total_amount text,
+  order_date date,
+  delivery_date date,
+  status text not null default 'draft',
+  payment_status text not null default 'pending',
+  amount_received text,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+alter table sale_orders enable row level security;
+
+create policy "users manage their own sale orders"
+  on sale_orders for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);

@@ -258,3 +258,28 @@ export async function removeLiftedMaterial(id) {
   const { error } = await supabase.from('lifted_material').delete().eq('id', id);
   if (error) throw error;
 }
+
+// ── Sale orders (per signed-in user) ────────────────────────────────────
+export async function fetchSaleOrders() {
+  const { data, error } = await supabase.from('sale_orders').select('*').order('created_at', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addSaleOrder(fields) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (!userId) throw new Error('Not signed in');
+  const { error } = await supabase.from('sale_orders').insert({ user_id: userId, ...fields });
+  if (error) throw error;
+}
+
+export async function updateSaleOrder(id, fields) {
+  const { error } = await supabase.from('sale_orders').update(fields).eq('id', id);
+  if (error) throw error;
+}
+
+export async function removeSaleOrder(id) {
+  const { error } = await supabase.from('sale_orders').delete().eq('id', id);
+  if (error) throw error;
+}

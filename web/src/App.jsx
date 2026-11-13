@@ -34,6 +34,8 @@ const AWARD_SOURCES = ['IREPS', 'MSTC', 'MJunction', 'Other'];
 const AWARD_STATUSES = ['awarded', 'payment_pending', 'payment_done', 'lifting', 'completed', 'cancelled'];
 const AWARD_STATUS_COLOR = { awarded: C.blue, payment_pending: C.amber, payment_done: C.blue, lifting: C.amber, completed: C.green, cancelled: C.red };
 const PAYMENT_STATUSES = ['pending', 'partial', 'paid'];
+const SALE_ORDER_STATUSES = ['draft', 'confirmed', 'dispatched', 'delivered', 'cancelled'];
+const SALE_ORDER_STATUS_COLOR = { draft: C.sub, confirmed: C.blue, dispatched: C.amber, delivered: C.green, cancelled: C.red };
 
 function parseNum(v) {
   const n = parseFloat(v);
@@ -927,6 +929,141 @@ function LiftedMaterialModal({ row, onSave, onClose }) {
   );
 }
 
+function SaleOrderModal({ row, onSave, onClose }) {
+  const isNew = !row?.id;
+  const [f, setF] = useState({
+    order_no: row?.order_no || '',
+    buyer_name: row?.buyer_name || '',
+    buyer_contact: row?.buyer_contact || '',
+    lot_no: row?.lot_no || '',
+    title: row?.title || '',
+    qty: row?.qty || '',
+    rate: row?.rate || '',
+    total_amount: row?.total_amount || '',
+    order_date: row?.order_date || '',
+    delivery_date: row?.delivery_date || '',
+    status: row?.status || 'draft',
+    payment_status: row?.payment_status || 'pending',
+    amount_received: row?.amount_received || '',
+    notes: row?.notes || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const set = (k) => (e) => setF(prev => ({ ...prev, [k]: e.target.value }));
+
+  const save = async () => {
+    if (!f.buyer_name.trim()) { setErr('Buyer name is required'); return; }
+    if (!f.title.trim()) { setErr('Title is required'); return; }
+    setSaving(true);
+    try {
+      const fields = { ...f, award_id: row?.award_id ?? null, order_date: f.order_date || null, delivery_date: f.delivery_date || null };
+      await onSave(fields, row?.id);
+      onClose();
+    } catch (e) {
+      setErr(e.message || String(e));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 540, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{isNew ? 'Add Sale Order' : 'Edit Sale Order'}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
+        </div>
+
+        {err && <div style={{ fontSize: 12, color: C.red, marginBottom: 12 }}>{err}</div>}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={field}>
+            <span style={label}>Order no</span>
+            <input value={f.order_no} onChange={set('order_no')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Order date</span>
+            <input type="date" value={f.order_date || ''} onChange={set('order_date')} style={modalInput} />
+          </label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={field}>
+            <span style={label}>Buyer name</span>
+            <input value={f.buyer_name} onChange={set('buyer_name')} style={modalInput} placeholder="Required" />
+          </label>
+          <label style={field}>
+            <span style={label}>Buyer contact</span>
+            <input value={f.buyer_contact} onChange={set('buyer_contact')} style={modalInput} />
+          </label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={field}>
+            <span style={label}>Lot No</span>
+            <input value={f.lot_no} onChange={set('lot_no')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Title / material description</span>
+            <input value={f.title} onChange={set('title')} style={modalInput} placeholder="Required" />
+          </label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
+          <label style={field}>
+            <span style={label}>Qty</span>
+            <input value={f.qty} onChange={set('qty')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Rate</span>
+            <input value={f.rate} onChange={set('rate')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Total amount</span>
+            <input value={f.total_amount} onChange={set('total_amount')} style={modalInput} />
+          </label>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Status &amp; delivery</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <label style={field}>
+            <span style={label}>Status</span>
+            <select value={f.status} onChange={set('status')} style={modalInput}>
+              {SALE_ORDER_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label style={field}>
+            <span style={label}>Delivery date</span>
+            <input type="date" value={f.delivery_date || ''} onChange={set('delivery_date')} style={modalInput} />
+          </label>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Payment</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <label style={field}>
+            <span style={label}>Status</span>
+            <select value={f.payment_status} onChange={set('payment_status')} style={modalInput}>
+              {PAYMENT_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label style={field}>
+            <span style={label}>Amount received</span>
+            <input value={f.amount_received} onChange={set('amount_received')} style={modalInput} />
+          </label>
+        </div>
+
+        <label style={{ ...field, marginBottom: 18 }}>
+          <span style={label}>Notes</span>
+          <input value={f.notes} onChange={set('notes')} style={modalInput} />
+        </label>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={save} disabled={saving} style={{ ...smallBtn, background: C.blue, color: '#fff', borderColor: C.blue }}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button onClick={onClose} style={smallBtn}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main app ─────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
@@ -953,6 +1090,8 @@ export default function App() {
   const [editAward, setEditAward] = useState(undefined); // undefined = modal closed, null = new
   const [liftedMaterial, setLiftedMaterial] = useState([]);
   const [editLifting, setEditLifting] = useState(undefined); // undefined = modal closed, null = new
+  const [saleOrders, setSaleOrders] = useState([]);
+  const [editSaleOrder, setEditSaleOrder] = useState(undefined); // undefined = modal closed, null = new
 
   // Watchlisted IREPS lots + manually-tracked external lots, grouped by
   // category and ranked by landing cost within each group, so the cheapest
@@ -1047,6 +1186,15 @@ export default function App() {
     }
   }, []);
 
+  const loadSaleOrders = useCallback(async () => {
+    try {
+      const rows = await DB.fetchSaleOrders();
+      setSaleOrders(rows);
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  }, []);
+
   useEffect(() => {
     if (session) {
       loadLots();
@@ -1055,9 +1203,10 @@ export default function App() {
       loadExternalLots();
       loadAwardedLots();
       loadLiftedMaterial();
+      loadSaleOrders();
       DB.fetchLatestScan().then(setLatestScan).catch(() => {});
     }
-  }, [session, loadLots, loadBookmarks, loadKeywords, loadExternalLots, loadAwardedLots, loadLiftedMaterial]);
+  }, [session, loadLots, loadBookmarks, loadKeywords, loadExternalLots, loadAwardedLots, loadLiftedMaterial, loadSaleOrders]);
 
   useEffect(() => {
     if (!session || !keywords.length) { setKeywordMatches([]); return; }
@@ -1140,6 +1289,21 @@ export default function App() {
     try {
       await DB.removeLiftedMaterial(id);
       await loadLiftedMaterial();
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  };
+
+  const saveSaleOrder = async (fields, id) => {
+    if (id) await DB.updateSaleOrder(id, fields);
+    else await DB.addSaleOrder(fields);
+    await loadSaleOrders();
+  };
+
+  const removeSaleOrder = async (id) => {
+    try {
+      await DB.removeSaleOrder(id);
+      await loadSaleOrders();
     } catch (e) {
       setErr(e.message || String(e));
     }
@@ -1379,7 +1543,8 @@ export default function App() {
             <tbody>
               {awardedLots.map(row => (
                 <AwardedLotRow key={row.id} row={row} onRemove={() => removeAward(row.id)} onEdit={() => setEditAward(row)}
-                  onLogLifting={() => setEditLifting({ award_id: row.id, lot_no: row.lot_no, title: row.title })} />
+                  onLogLifting={() => setEditLifting({ award_id: row.id, lot_no: row.lot_no, title: row.title })}
+                  onSell={() => setEditSaleOrder({ award_id: row.id, lot_no: row.lot_no, title: row.title, qty: row.qty_lifted || row.qty_unit, rate: row.sold_rate })} />
               ))}
               {!awardedLots.length && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: C.sub }}>No lots awarded yet.</td></tr>}
             </tbody>
@@ -1407,17 +1572,58 @@ export default function App() {
             </tbody>
           </table>
         </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '26px 0 10px' }}>
+          <h2 style={{ fontSize: 15, margin: 0 }}>Sale Orders ({saleOrders.length})</h2>
+          <button onClick={() => setEditSaleOrder(null)} style={smallBtn}>Add Sale Order</button>
+        </div>
+        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: '#fafafa', textAlign: 'left' }}>
+                <th style={th}>Order No</th><th style={th}>Buyer</th><th style={th}>Title</th>
+                <th style={th}>Qty</th><th style={th}>Total</th><th style={th}>Status</th>
+                <th style={th}>Payment</th><th style={th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {saleOrders.map(row => (
+                <SaleOrderRow key={row.id} row={row} onRemove={() => removeSaleOrder(row.id)} onEdit={() => setEditSaleOrder(row)} />
+              ))}
+              {!saleOrders.length && <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: C.sub }}>No sale orders yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
       </div>
       {detailLot && <LotDetailModal row={detailLot} onClose={() => setDetailLot(null)} />}
       {editWatchRow && <WatchlistEditModal row={editWatchRow} onSave={saveBookmark} onClose={() => setEditWatchRow(null)} />}
       {editExternalLot !== undefined && <ExternalLotModal row={editExternalLot} onSave={saveExternalLot} onClose={() => setEditExternalLot(undefined)} />}
       {editAward !== undefined && <AwardedLotModal row={editAward} onSave={saveAward} onClose={() => setEditAward(undefined)} />}
       {editLifting !== undefined && <LiftedMaterialModal row={editLifting} onSave={saveLifting} onClose={() => setEditLifting(undefined)} />}
+      {editSaleOrder !== undefined && <SaleOrderModal row={editSaleOrder} onSave={saveSaleOrder} onClose={() => setEditSaleOrder(undefined)} />}
     </div>
   );
 }
 
-function AwardedLotRow({ row, onRemove, onEdit, onLogLifting }) {
+function SaleOrderRow({ row, onRemove, onEdit }) {
+  return (
+    <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
+      <td style={td}>{row.order_no || '-'}</td>
+      <td style={td}>{row.buyer_name}</td>
+      <td style={{ ...td, maxWidth: 220 }}>{row.title}</td>
+      <td style={td}>{row.qty || '-'}</td>
+      <td style={td}>{row.total_amount || '-'}</td>
+      <td style={td}><Badge text={row.status} color={SALE_ORDER_STATUS_COLOR[row.status] || C.sub} /></td>
+      <td style={td}>{row.payment_status}{row.amount_received ? ` · ${row.amount_received}` : ''}</td>
+      <td style={td}>
+        <button onClick={onEdit} style={smallBtn}>Edit</button>{' '}
+        <button onClick={onRemove} style={{ ...smallBtn, color: C.red }}>Remove</button>
+      </td>
+    </tr>
+  );
+}
+
+function AwardedLotRow({ row, onRemove, onEdit, onLogLifting, onSell }) {
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
       <td style={td}>{row.source}</td>
@@ -1429,6 +1635,7 @@ function AwardedLotRow({ row, onRemove, onEdit, onLogLifting }) {
       <td style={td}>
         <button onClick={onEdit} style={smallBtn}>Edit</button>{' '}
         <button onClick={onLogLifting} style={smallBtn}>Log Lifting</button>{' '}
+        <button onClick={onSell} style={smallBtn}>Sell</button>{' '}
         <button onClick={onRemove} style={{ ...smallBtn, color: C.red }}>Remove</button>
       </td>
     </tr>
