@@ -191,3 +191,31 @@ create policy "users manage their own award documents"
   on storage.objects for all
   using (bucket_id = 'award-documents' and (storage.foldername(name))[1] = auth.uid()::text)
   with check (bucket_id = 'award-documents' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Phase 7: lifted_material -- a ledger of individual lifting/gate-pass
+-- events against an awarded lot. award_id links back to awarded_lots when
+-- logged from there (set null if that award is later deleted, so the
+-- lifting record itself isn't lost); lot_no/title are denormalized so an
+-- entry still reads fine on its own. Scoped to the signed-in user via RLS.
+create table if not exists lifted_material (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  award_id bigint references awarded_lots(id) on delete set null,
+  lot_no text,
+  title text not null,
+  lifted_date date,
+  qty text,
+  vehicle_no text,
+  transporter text,
+  gate_pass_no text,
+  destination text,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+alter table lifted_material enable row level security;
+
+create policy "users manage their own lifted material"
+  on lifted_material for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);

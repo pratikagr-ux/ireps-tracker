@@ -833,6 +833,100 @@ function AwardedLotModal({ row, onSave, onClose }) {
   );
 }
 
+function LiftedMaterialModal({ row, onSave, onClose }) {
+  const isNew = !row?.id;
+  const [f, setF] = useState({
+    award_id: row?.award_id ?? null,
+    lot_no: row?.lot_no || '',
+    title: row?.title || '',
+    lifted_date: row?.lifted_date || '',
+    qty: row?.qty || '',
+    vehicle_no: row?.vehicle_no || '',
+    transporter: row?.transporter || '',
+    gate_pass_no: row?.gate_pass_no || '',
+    destination: row?.destination || '',
+    notes: row?.notes || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const set = (k) => (e) => setF(prev => ({ ...prev, [k]: e.target.value }));
+
+  const save = async () => {
+    if (!f.title.trim()) { setErr('Title is required'); return; }
+    setSaving(true);
+    try {
+      await onSave({ ...f, lifted_date: f.lifted_date || null }, row?.id);
+      onClose();
+    } catch (e) {
+      setErr(e.message || String(e));
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 480, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{isNew ? 'Log Lifting' : 'Edit Lifting Entry'}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
+        </div>
+
+        {err && <div style={{ fontSize: 12, color: C.red, marginBottom: 12 }}>{err}</div>}
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={field}>
+            <span style={label}>Lot No</span>
+            <input value={f.lot_no} onChange={set('lot_no')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Lifted date</span>
+            <input type="date" value={f.lifted_date || ''} onChange={set('lifted_date')} style={modalInput} />
+          </label>
+        </div>
+        <label style={{ ...field, marginBottom: 12 }}>
+          <span style={label}>Title / material description</span>
+          <input value={f.title} onChange={set('title')} style={modalInput} placeholder="Required" />
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={field}>
+            <span style={label}>Qty lifted</span>
+            <input value={f.qty} onChange={set('qty')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Vehicle no</span>
+            <input value={f.vehicle_no} onChange={set('vehicle_no')} style={modalInput} />
+          </label>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+          <label style={field}>
+            <span style={label}>Transporter</span>
+            <input value={f.transporter} onChange={set('transporter')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Gate pass no</span>
+            <input value={f.gate_pass_no} onChange={set('gate_pass_no')} style={modalInput} />
+          </label>
+        </div>
+        <label style={{ ...field, marginBottom: 12 }}>
+          <span style={label}>Destination</span>
+          <input value={f.destination} onChange={set('destination')} style={modalInput} />
+        </label>
+        <label style={{ ...field, marginBottom: 18 }}>
+          <span style={label}>Notes</span>
+          <input value={f.notes} onChange={set('notes')} style={modalInput} />
+        </label>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={save} disabled={saving} style={{ ...smallBtn, background: C.blue, color: '#fff', borderColor: C.blue }}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button onClick={onClose} style={smallBtn}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main app ─────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
@@ -857,6 +951,8 @@ export default function App() {
   const [editExternalLot, setEditExternalLot] = useState(undefined); // undefined = modal closed, null = new
   const [awardedLots, setAwardedLots] = useState([]);
   const [editAward, setEditAward] = useState(undefined); // undefined = modal closed, null = new
+  const [liftedMaterial, setLiftedMaterial] = useState([]);
+  const [editLifting, setEditLifting] = useState(undefined); // undefined = modal closed, null = new
 
   // Watchlisted IREPS lots + manually-tracked external lots, grouped by
   // category and ranked by landing cost within each group, so the cheapest
@@ -942,6 +1038,15 @@ export default function App() {
     }
   }, []);
 
+  const loadLiftedMaterial = useCallback(async () => {
+    try {
+      const rows = await DB.fetchLiftedMaterial();
+      setLiftedMaterial(rows);
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  }, []);
+
   useEffect(() => {
     if (session) {
       loadLots();
@@ -949,9 +1054,10 @@ export default function App() {
       loadKeywords();
       loadExternalLots();
       loadAwardedLots();
+      loadLiftedMaterial();
       DB.fetchLatestScan().then(setLatestScan).catch(() => {});
     }
-  }, [session, loadLots, loadBookmarks, loadKeywords, loadExternalLots, loadAwardedLots]);
+  }, [session, loadLots, loadBookmarks, loadKeywords, loadExternalLots, loadAwardedLots, loadLiftedMaterial]);
 
   useEffect(() => {
     if (!session || !keywords.length) { setKeywordMatches([]); return; }
@@ -1019,6 +1125,21 @@ export default function App() {
     try {
       await DB.removeAwardedLot(id);
       await loadAwardedLots();
+    } catch (e) {
+      setErr(e.message || String(e));
+    }
+  };
+
+  const saveLifting = async (fields, id) => {
+    if (id) await DB.updateLiftedMaterial(id, fields);
+    else await DB.addLiftedMaterial(fields);
+    await loadLiftedMaterial();
+  };
+
+  const removeLifting = async (id) => {
+    try {
+      await DB.removeLiftedMaterial(id);
+      await loadLiftedMaterial();
     } catch (e) {
       setErr(e.message || String(e));
     }
@@ -1257,9 +1378,32 @@ export default function App() {
             </thead>
             <tbody>
               {awardedLots.map(row => (
-                <AwardedLotRow key={row.id} row={row} onRemove={() => removeAward(row.id)} onEdit={() => setEditAward(row)} />
+                <AwardedLotRow key={row.id} row={row} onRemove={() => removeAward(row.id)} onEdit={() => setEditAward(row)}
+                  onLogLifting={() => setEditLifting({ award_id: row.id, lot_no: row.lot_no, title: row.title })} />
               ))}
               {!awardedLots.length && <tr><td colSpan={7} style={{ ...td, textAlign: 'center', color: C.sub }}>No lots awarded yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: '26px 0 10px' }}>
+          <h2 style={{ fontSize: 15, margin: 0 }}>Lifted Material ({liftedMaterial.length})</h2>
+          <button onClick={() => setEditLifting(null)} style={smallBtn}>Log Lifting</button>
+        </div>
+        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: '#fafafa', textAlign: 'left' }}>
+                <th style={th}>Date</th><th style={th}>Lot No</th><th style={th}>Title</th>
+                <th style={th}>Qty</th><th style={th}>Vehicle No</th><th style={th}>Transporter</th>
+                <th style={th}>Gate Pass No</th><th style={th}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {liftedMaterial.map(row => (
+                <LiftedMaterialRow key={row.id} row={row} onRemove={() => removeLifting(row.id)} onEdit={() => setEditLifting(row)} />
+              ))}
+              {!liftedMaterial.length && <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: C.sub }}>No lifting logged yet.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1268,11 +1412,12 @@ export default function App() {
       {editWatchRow && <WatchlistEditModal row={editWatchRow} onSave={saveBookmark} onClose={() => setEditWatchRow(null)} />}
       {editExternalLot !== undefined && <ExternalLotModal row={editExternalLot} onSave={saveExternalLot} onClose={() => setEditExternalLot(undefined)} />}
       {editAward !== undefined && <AwardedLotModal row={editAward} onSave={saveAward} onClose={() => setEditAward(undefined)} />}
+      {editLifting !== undefined && <LiftedMaterialModal row={editLifting} onSave={saveLifting} onClose={() => setEditLifting(undefined)} />}
     </div>
   );
 }
 
-function AwardedLotRow({ row, onRemove, onEdit }) {
+function AwardedLotRow({ row, onRemove, onEdit, onLogLifting }) {
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
       <td style={td}>{row.source}</td>
@@ -1281,6 +1426,25 @@ function AwardedLotRow({ row, onRemove, onEdit }) {
       <td style={td}><Badge text={row.status.replace('_', ' ')} color={AWARD_STATUS_COLOR[row.status] || C.sub} /></td>
       <td style={td}>{row.payment_status}{row.amount_paid ? ` · ${row.amount_paid}` : ''}</td>
       <td style={td}>{row.qty_lifted || '-'} / {row.qty_balance || '-'}</td>
+      <td style={td}>
+        <button onClick={onEdit} style={smallBtn}>Edit</button>{' '}
+        <button onClick={onLogLifting} style={smallBtn}>Log Lifting</button>{' '}
+        <button onClick={onRemove} style={{ ...smallBtn, color: C.red }}>Remove</button>
+      </td>
+    </tr>
+  );
+}
+
+function LiftedMaterialRow({ row, onRemove, onEdit }) {
+  return (
+    <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
+      <td style={td}>{row.lifted_date || '-'}</td>
+      <td style={td}>{row.lot_no || '-'}</td>
+      <td style={{ ...td, maxWidth: 240 }}>{row.title}</td>
+      <td style={td}>{row.qty || '-'}</td>
+      <td style={td}>{row.vehicle_no || '-'}</td>
+      <td style={td}>{row.transporter || '-'}</td>
+      <td style={td}>{row.gate_pass_no || '-'}</td>
       <td style={td}>
         <button onClick={onEdit} style={smallBtn}>Edit</button>{' '}
         <button onClick={onRemove} style={{ ...smallBtn, color: C.red }}>Remove</button>

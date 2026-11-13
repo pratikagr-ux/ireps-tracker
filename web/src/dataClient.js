@@ -233,3 +233,28 @@ export async function deleteAwardDocument(awardId, filename) {
   const { error } = await supabase.storage.from('award-documents').remove([`${userId}/${awardId}/${filename}`]);
   if (error) throw error;
 }
+
+// ── Lifted material (per signed-in user) ────────────────────────────────
+export async function fetchLiftedMaterial() {
+  const { data, error } = await supabase.from('lifted_material').select('*').order('lifted_date', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addLiftedMaterial(fields) {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const userId = sessionData?.session?.user?.id;
+  if (!userId) throw new Error('Not signed in');
+  const { error } = await supabase.from('lifted_material').insert({ user_id: userId, ...fields });
+  if (error) throw error;
+}
+
+export async function updateLiftedMaterial(id, fields) {
+  const { error } = await supabase.from('lifted_material').update(fields).eq('id', id);
+  if (error) throw error;
+}
+
+export async function removeLiftedMaterial(id) {
+  const { error } = await supabase.from('lifted_material').delete().eq('id', id);
+  if (error) throw error;
+}
