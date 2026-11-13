@@ -424,6 +424,26 @@ export default function App() {
   const [detailLot, setDetailLot] = useState(null);
   const [editWatchRow, setEditWatchRow] = useState(null);
 
+  // Watchlisted lots grouped by category and ranked by landing cost within
+  // each group, so the cheapest option to actually land is obvious before
+  // you commit to bidding on any one of them.
+  const landingComparison = useMemo(() => {
+    const withCost = bookmarks.map(row => ({ row, cost: landingCost(row) }));
+    const byCategory = {};
+    for (const item of withCost) {
+      const cat = item.row.category || 'Uncategorized';
+      (byCategory[cat] = byCategory[cat] || []).push(item);
+    }
+    for (const cat of Object.keys(byCategory)) {
+      byCategory[cat].sort((a, b) => {
+        if (a.cost === null) return 1;
+        if (b.cost === null) return -1;
+        return a.cost - b.cost;
+      });
+    }
+    return Object.entries(byCategory).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [bookmarks]);
+
   useEffect(() => {
     if (!supabase) { setSession(null); return; }
     DB.getSession().then(setSession);
@@ -674,6 +694,38 @@ export default function App() {
             </tbody>
           </table>
         </div>
+
+        {bookmarks.length > 0 && (
+          <>
+            <h2 style={{ fontSize: 15, margin: '26px 0 10px' }}>Landing Cost Comparison</h2>
+            <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ background: '#fafafa', textAlign: 'left' }}>
+                    <th style={th}>Category</th><th style={th}>Lot No</th><th style={th}>Material Descr.</th>
+                    <th style={th}>Target Rate</th><th style={th}>Lifting</th><th style={th}>Transport</th>
+                    <th style={th}>Landing Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {landingComparison.map(([cat, items]) => items.map(({ row, cost }, i) => (
+                    <tr key={row.lot_no} style={{ borderTop: `1px solid ${C.bdr}` }}>
+                      <td style={{ ...td, fontWeight: i === 0 ? 600 : 400, color: i === 0 ? C.txt : C.sub }}>{i === 0 ? cat : ''}</td>
+                      <td style={td}>{row.lot_no}</td>
+                      <td style={{ ...td, maxWidth: 260 }}>{row.material_descr}</td>
+                      <td style={td}>{row.target_rate || '-'}</td>
+                      <td style={td}>{row.lifting_expense || '-'}</td>
+                      <td style={td}>{row.transport_expense || '-'}</td>
+                      <td style={{ ...td, fontWeight: i === 0 && cost !== null ? 700 : 400, color: i === 0 && cost !== null ? C.green : C.txt }}>
+                        {cost === null ? '-' : cost.toFixed(2)}
+                      </td>
+                    </tr>
+                  )))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
       {detailLot && <LotDetailModal row={detailLot} onClose={() => setDetailLot(null)} />}
       {editWatchRow && <WatchlistEditModal row={editWatchRow} onSave={saveBookmark} onClose={() => setEditWatchRow(null)} />}
