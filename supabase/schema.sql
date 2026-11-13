@@ -89,3 +89,18 @@ create policy "users manage their own keywords"
   on keywords for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- Phase 3: turn bookmarks into a full Watchlist -- status through the
+-- shortlist -> inspect -> EMD -> auction-day flow, plus the fields needed
+-- to compare landing cost before bidding.
+alter table bookmarks add column if not exists watch_status text not null default 'watching';
+alter table bookmarks add column if not exists team text;
+alter table bookmarks add column if not exists inspection_status text not null default 'pending';
+alter table bookmarks add column if not exists inspection_notes text;
+alter table bookmarks add column if not exists emd_required boolean not null default false;
+alter table bookmarks add column if not exists emd_amount text;
+alter table bookmarks add column if not exists emd_paid boolean not null default false;
+alter table bookmarks add column if not exists last_bid text;
+alter table bookmarks add column if not exists won_by text;
+alter table bookmarks add column if not exists lifting_expense text;
+alter table bookmarks add column if not exists transport_expense text;

@@ -26,6 +26,25 @@ function Badge({ text, color }) {
 
 const TAG_COLOR = { new: C.green, updated: C.amber, expired: C.red, unchanged: C.sub };
 
+const WATCH_STATUSES = ['watching', 'shortlisted', 'inspected', 'participating', 'won', 'lost'];
+const WATCH_STATUS_COLOR = { watching: C.sub, shortlisted: C.blue, inspected: C.amber, participating: C.amber, won: C.green, lost: C.red };
+const INSPECTION_STATUSES = ['pending', 'scheduled', 'done', 'skipped'];
+
+function parseNum(v) {
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+// target rate + estimated lifting/transport expenses -- what the lot would
+// actually cost us if we win it at our target, before we ever place a bid.
+function landingCost(row) {
+  const target = parseNum(row.target_rate);
+  if (target === null) return null;
+  const lifting = parseNum(row.lifting_expense) || 0;
+  const transport = parseNum(row.transport_expense) || 0;
+  return target + lifting + transport;
+}
+
 // ── Login / sign-up ─────────────────────────────────────────────────────
 function LoginScreen({ onSignedIn }) {
   const [mode, setMode] = useState('signin'); // signin | signup
@@ -248,6 +267,142 @@ function LotDetailModal({ row, onClose }) {
   );
 }
 
+const field = { display: 'flex', flexDirection: 'column', gap: 3 };
+const label = { fontSize: 11, fontWeight: 600, color: C.sub };
+const modalInput = { padding: '6px 8px', borderRadius: 5, border: `1px solid ${C.bdr}`, fontSize: 12.5, fontFamily: 'inherit', width: '100%', boxSizing: 'border-box' };
+
+function WatchlistEditModal({ row, onSave, onClose }) {
+  const [f, setF] = useState({
+    watch_status: row.watch_status || 'watching',
+    team: row.team || '',
+    notes: row.notes || '',
+    inspection_status: row.inspection_status || 'pending',
+    inspection_notes: row.inspection_notes || '',
+    emd_required: !!row.emd_required,
+    emd_amount: row.emd_amount || '',
+    emd_paid: !!row.emd_paid,
+    target_rate: row.target_rate || '',
+    lifting_expense: row.lifting_expense || '',
+    transport_expense: row.transport_expense || '',
+    last_bid: row.last_bid || '',
+    sold_rate: row.sold_rate || '',
+    won_by: row.won_by || '',
+  });
+  const [saving, setSaving] = useState(false);
+  const set = (k) => (e) => setF(prev => ({ ...prev, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value }));
+
+  const save = async () => {
+    setSaving(true);
+    await onSave(row.lot_no, f);
+    setSaving(false);
+    onClose();
+  };
+
+  const cost = landingCost(f);
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 560, maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 4 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Watchlist · Lot {row.lot_no}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 18, cursor: 'pointer', color: C.sub, lineHeight: 1 }}>×</button>
+        </div>
+        <div style={{ fontSize: 12.5, color: C.sub, marginBottom: 16 }}>{row.material_descr}</div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <label style={field}>
+            <span style={label}>Status</span>
+            <select value={f.watch_status} onChange={set('watch_status')} style={modalInput}>
+              {WATCH_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label style={field}>
+            <span style={label}>Team</span>
+            <input value={f.team} onChange={set('team')} style={modalInput} placeholder="Who's on this" />
+          </label>
+        </div>
+
+        <label style={{ ...field, marginBottom: 14 }}>
+          <span style={label}>Notes</span>
+          <textarea value={f.notes} onChange={set('notes')} rows={2} style={{ ...modalInput, resize: 'vertical' }} />
+        </label>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Inspection</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
+          <label style={field}>
+            <span style={label}>Status</span>
+            <select value={f.inspection_status} onChange={set('inspection_status')} style={modalInput}>
+              {INSPECTION_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </label>
+          <label style={field}>
+            <span style={label}>Inspection notes</span>
+            <input value={f.inspection_notes} onChange={set('inspection_notes')} style={modalInput} />
+          </label>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>EMD</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 12, alignItems: 'end', marginBottom: 14 }}>
+          <label style={{ ...field, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={f.emd_required} onChange={set('emd_required')} />
+            <span style={label}>Required</span>
+          </label>
+          <label style={field}>
+            <span style={label}>Amount</span>
+            <input value={f.emd_amount} onChange={set('emd_amount')} style={modalInput} disabled={!f.emd_required} />
+          </label>
+          <label style={{ ...field, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <input type="checkbox" checked={f.emd_paid} onChange={set('emd_paid')} disabled={!f.emd_required} />
+            <span style={label}>Paid</span>
+          </label>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Rates &amp; landing cost</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 6 }}>
+          <label style={field}>
+            <span style={label}>Target rate</span>
+            <input value={f.target_rate} onChange={set('target_rate')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Lifting expense</span>
+            <input value={f.lifting_expense} onChange={set('lifting_expense')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Transport expense</span>
+            <input value={f.transport_expense} onChange={set('transport_expense')} style={modalInput} />
+          </label>
+        </div>
+        <div style={{ fontSize: 12, color: C.sub, marginBottom: 14 }}>
+          Estimated landing cost: <strong style={{ color: C.txt }}>{cost === null ? '-' : cost.toFixed(2)}</strong>
+        </div>
+
+        <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 8 }}>Auction-day log</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 18 }}>
+          <label style={field}>
+            <span style={label}>Last bid</span>
+            <input value={f.last_bid} onChange={set('last_bid')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Sold rate</span>
+            <input value={f.sold_rate} onChange={set('sold_rate')} style={modalInput} />
+          </label>
+          <label style={field}>
+            <span style={label}>Won by</span>
+            <input value={f.won_by} onChange={set('won_by')} style={modalInput} placeholder="If not us" />
+          </label>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={save} disabled={saving} style={{ ...smallBtn, background: C.blue, color: '#fff', borderColor: C.blue }}>
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          <button onClick={onClose} style={smallBtn}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main app ─────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
@@ -267,6 +422,7 @@ export default function App() {
   const [keywordMatches, setKeywordMatches] = useState([]);
   const [newKeyword, setNewKeyword] = useState('');
   const [detailLot, setDetailLot] = useState(null);
+  const [editWatchRow, setEditWatchRow] = useState(null);
 
   useEffect(() => {
     if (!supabase) { setSession(null); return; }
@@ -500,60 +656,46 @@ export default function App() {
           </table>
         </div>
 
-        <h2 style={{ fontSize: 15, margin: '26px 0 10px' }}>Bookmarks ({bookmarks.length})</h2>
+        <h2 style={{ fontSize: 15, margin: '26px 0 10px' }}>Watchlist ({bookmarks.length})</h2>
         <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
                 <th style={th}>Lot No</th><th style={th}>Location</th><th style={th}>Material Descr.</th>
-                <th style={th}>Notes</th><th style={th}>Target Rate</th><th style={th}>Secured Rate</th>
-                <th style={th}>Sold Rate</th><th style={th}>Expenses</th><th style={th}>Actions</th>
+                <th style={th}>Status</th><th style={th}>Team</th><th style={th}>Target Rate</th>
+                <th style={th}>Landing Cost</th><th style={th}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {bookmarks.map(row => (
-                <BookmarkRow key={row.lot_no} row={row} onSave={saveBookmark} onRemove={() => toggleBookmark(row.lot_no)} onDetails={() => setDetailLot(row)} />
+                <WatchlistRow key={row.lot_no} row={row} onRemove={() => toggleBookmark(row.lot_no)} onDetails={() => setDetailLot(row)} onEdit={() => setEditWatchRow(row)} />
               ))}
-              {!bookmarks.length && <tr><td colSpan={9} style={{ ...td, textAlign: 'center', color: C.sub }}>No bookmarks yet — star a lot above.</td></tr>}
+              {!bookmarks.length && <tr><td colSpan={8} style={{ ...td, textAlign: 'center', color: C.sub }}>Nothing on your watchlist yet — star a lot above.</td></tr>}
             </tbody>
           </table>
         </div>
       </div>
       {detailLot && <LotDetailModal row={detailLot} onClose={() => setDetailLot(null)} />}
+      {editWatchRow && <WatchlistEditModal row={editWatchRow} onSave={saveBookmark} onClose={() => setEditWatchRow(null)} />}
     </div>
   );
 }
 
-function BookmarkRow({ row, onSave, onRemove, onDetails }) {
-  const [notes, setNotes] = useState(row.notes || '');
-  const [target, setTarget] = useState(row.target_rate || '');
-  const [secured, setSecured] = useState(row.secured_rate || '');
-  const [sold, setSold] = useState(row.sold_rate || '');
-  const [expenses, setExpenses] = useState(row.expenses || '');
-  const [status, setStatus] = useState('');
-
-  const save = async () => {
-    setStatus('Saving…');
-    await onSave(row.lot_no, { notes, target_rate: target, secured_rate: secured, sold_rate: sold, expenses });
-    setStatus('Saved');
-    setTimeout(() => setStatus(''), 1500);
-  };
-
+function WatchlistRow({ row, onRemove, onDetails, onEdit }) {
+  const cost = landingCost(row);
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
       <td style={td}>{row.lot_no}</td>
       <td style={td}>{row.location}</td>
       <td style={{ ...td, maxWidth: 240 }}>{row.material_descr}</td>
-      <td style={td}><input value={notes} onChange={e => setNotes(e.target.value)} style={input} /></td>
-      <td style={td}><input value={target} onChange={e => setTarget(e.target.value)} style={{ ...input, width: 80 }} /></td>
-      <td style={td}><input value={secured} onChange={e => setSecured(e.target.value)} style={{ ...input, width: 80 }} /></td>
-      <td style={td}><input value={sold} onChange={e => setSold(e.target.value)} style={{ ...input, width: 80 }} /></td>
-      <td style={td}><input value={expenses} onChange={e => setExpenses(e.target.value)} style={{ ...input, width: 80 }} /></td>
+      <td style={td}><Badge text={row.watch_status || 'watching'} color={WATCH_STATUS_COLOR[row.watch_status] || C.sub} /></td>
+      <td style={td}>{row.team || '-'}</td>
+      <td style={td}>{row.target_rate || '-'}</td>
+      <td style={td}>{cost === null ? '-' : cost.toFixed(2)}</td>
       <td style={td}>
-        <button onClick={save} style={smallBtn}>Save</button>{' '}
+        <button onClick={onEdit} style={smallBtn}>Edit</button>{' '}
         <button onClick={onDetails} style={smallBtn}>Details</button>{' '}
-        <button onClick={onRemove} style={{ ...smallBtn, color: C.red }}>Remove</button>{' '}
-        <span style={{ fontSize: 11, color: C.sub }}>{status}</span>
+        <button onClick={onRemove} style={{ ...smallBtn, color: C.red }}>Remove</button>
       </td>
     </tr>
   );
@@ -561,5 +703,4 @@ function BookmarkRow({ row, onSave, onRemove, onDetails }) {
 
 const th = { padding: '8px 10px', fontSize: 11, fontWeight: 600, color: C.sub, whiteSpace: 'nowrap' };
 const td = { padding: '7px 10px', verticalAlign: 'top' };
-const input = { width: 110, padding: '4px 6px', borderRadius: 4, border: `1px solid ${C.bdr}`, fontSize: 12, fontFamily: 'inherit' };
 const smallBtn = { padding: '4px 9px', borderRadius: 5, border: `1px solid ${C.bdr}`, background: '#fff', fontSize: 11, cursor: 'pointer' };
