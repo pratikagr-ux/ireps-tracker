@@ -92,9 +92,12 @@ TRACKED_FIELD_LABELS = {
 
 def fetch_existing_lots(base_url: str, headers: dict) -> dict[str, dict]:
     """lot_no -> {content_hash, status, first_seen_at, <tracked fields>} for
-    every lot currently in Supabase, so a fresh scrape can be diffed
-    against it (for change_tag, and a field-level change_detail) without
-    any local persistence."""
+    every IREPS lot currently in Supabase, so a fresh scrape can be diffed
+    against it (for change_tag, a field-level change_detail, and expiry)
+    without any local persistence. Scoped to source='IREPS' -- without
+    this, a lot_no this scan never sees (every Matex/MSTC row, by
+    definition, plus any IREPS railway a partial/scoped run skips) would
+    look "not seen" and get wrongly marked expired."""
     select_fields = "lot_no,content_hash,status,first_seen_at," + ",".join(ireps_core.TRACKED_FIELDS)
     out: dict[str, dict] = {}
     offset = 0
@@ -105,6 +108,7 @@ def fetch_existing_lots(base_url: str, headers: dict) -> dict[str, dict]:
             headers=headers,
             params={
                 "select": select_fields,
+                "source": "eq.IREPS",
                 "limit": str(EXISTING_PAGE_SIZE),
                 "offset": str(offset),
             },
@@ -361,9 +365,15 @@ def main():
 
     started_at = datetime.now(timezone.utc).isoformat()
     print("Scanning IREPS and syncing to Supabase...", file=sys.stderr)
+    # Expiry ("not seen this run -> expired") is only safe on a truly
+    # comprehensive scan -- any restriction (a page cap, or a single
+    # railway/depot) means plenty of genuinely-still-active lots elsewhere
+    # on the site were never looked at this run, and would otherwise get
+    # wrongly marked expired right alongside the ones actually gone.
+    is_unrestricted = args.max_pages is None and not args.rail_unit and args.depot_id == "-1"
     summary = run_scan(
         base_url, headers, args.rail_unit, args.depot_id, args.max_pages, args.delay,
-        allow_expire=(args.max_pages is None),
+        allow_expire=is_unrestricted,
     )
     finished_at = datetime.now(timezone.utc).isoformat()
     print(
