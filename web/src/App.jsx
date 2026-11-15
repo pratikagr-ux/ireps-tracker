@@ -16,11 +16,14 @@ import './App.css';
 
 const IREPS_LOT_URL = (lotId) => `https://ireps.gov.in/eps/auction/viewLotAnon.do?lotId=${encodeURIComponent(lotId)}`;
 const MATEX_URL = 'https://www.matexnet.com/Index.aspx';
+const MSTC_URL = 'https://www.mstcecommerce.com/auctionhome/aucsearch/search.jsp';
 
-// Matex has no public per-lot URL (per-lot detail sits behind a login we
-// don't have), so its "View on..." link just goes to the public listing.
+// Matex and MSTC have no public per-lot URL (per-lot detail sits behind a
+// login we don't have for either), so their "View on..." link just goes to
+// the public listing/search page instead.
 function sourceLink(row) {
   if (row.source === 'Matex') return { url: MATEX_URL, label: 'View on Matex' };
+  if (row.source === 'MSTC') return { url: MSTC_URL, label: 'View on MSTC' };
   return { url: IREPS_LOT_URL(row.lot_id), label: 'View on IREPS' };
 }
 
@@ -1550,6 +1553,7 @@ export default function App() {
             <option value="">All sources</option>
             <option value="IREPS">IREPS</option>
             <option value="Matex">Matex</option>
+            <option value="MSTC">MSTC</option>
           </select>
           <select value={category} onChange={e => setCategory(e.target.value)} style={{ padding: '8px 10px', borderRadius: 6, border: `1px solid ${C.bdr}`, fontSize: 13 }}>
             <option value="">All categories</option>
