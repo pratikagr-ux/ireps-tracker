@@ -28,6 +28,7 @@ from pathlib import Path
 import requests
 
 import matex_core
+from net_retry import call_with_retry
 
 ENV_FILE = Path(__file__).parent / ".env.local"
 REQUIRED_KEYS = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")
@@ -66,7 +67,8 @@ def fetch_existing_matex_lots(base_url: str, headers: dict) -> dict[str, dict]:
     out: dict[str, dict] = {}
     offset = 0
     while True:
-        resp = requests.get(
+        resp = call_with_retry(
+            requests.get,
             f"{base_url}/rest/v1/lots",
             headers=headers,
             params={
@@ -127,7 +129,8 @@ def process_event(event: dict, existing: dict[str, dict], now_iso: str) -> dict:
 def push_lots(base_url: str, headers: dict, rows: list[dict]) -> None:
     if not rows:
         return
-    resp = requests.post(
+    resp = call_with_retry(
+        requests.post,
         f"{base_url}/rest/v1/lots",
         headers={**headers, "Prefer": "resolution=merge-duplicates,return=minimal"},
         json=rows,
@@ -141,7 +144,8 @@ def push_lots(base_url: str, headers: dict, rows: list[dict]) -> None:
 def mark_expired(base_url: str, headers: dict, lot_nos: list[str]) -> None:
     if not lot_nos:
         return
-    resp = requests.patch(
+    resp = call_with_retry(
+        requests.patch,
         f"{base_url}/rest/v1/lots",
         headers={**headers, "Prefer": "return=minimal"},
         params={"lot_no": "in.({})".format(",".join(lot_nos))},
@@ -162,7 +166,8 @@ def push_scan_summary(base_url: str, headers: dict, started_at: str, finished_at
         "updated_count": summary["updated_count"],
         "expired_count": summary["expired_count"],
     }
-    resp = requests.post(
+    resp = call_with_retry(
+        requests.post,
         f"{base_url}/rest/v1/scans", headers={**headers, "Prefer": "return=minimal"}, json=payload, timeout=30
     )
     if resp.status_code >= 300:

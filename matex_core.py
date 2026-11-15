@@ -17,6 +17,8 @@ import re
 import requests
 from bs4 import BeautifulSoup
 
+from net_retry import call_with_retry
+
 INDEX_URL = "https://www.matexnet.com/Index.aspx"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; auction-tracker/1.0)",
@@ -105,6 +107,6 @@ def parse_events(html: str) -> list[dict]:
 def scan() -> list[dict]:
     """One-shot fetch + parse of the public Matex "All Events" list."""
     session = requests.Session()
-    resp = session.get(INDEX_URL, headers=HEADERS, timeout=30)
+    resp = call_with_retry(session.get, INDEX_URL, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     return parse_events(resp.text)

@@ -39,6 +39,8 @@ from pathlib import Path
 
 import requests
 
+from net_retry import call_with_retry
+
 ENV_FILE = Path(__file__).parent / ".env.local"
 REQUIRED_KEYS = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")
 MSTC_SEARCH_URL = "https://www.mstcecommerce.com/auctionhome/aucsearch/search.jsp"
@@ -129,7 +131,8 @@ def fetch_existing_mstc_lots(base_url: str, headers: dict) -> dict[str, dict]:
     offset = 0
     page_size = 1000
     while True:
-        resp = requests.get(
+        resp = call_with_retry(
+            requests.get,
             f"{base_url}/rest/v1/lots",
             headers=headers,
             params={
@@ -155,7 +158,8 @@ def fetch_existing_mstc_lots(base_url: str, headers: dict) -> dict[str, dict]:
 def push_lots(base_url: str, headers: dict, rows: list[dict]) -> None:
     if not rows:
         return
-    resp = requests.post(
+    resp = call_with_retry(
+        requests.post,
         f"{base_url}/rest/v1/lots",
         headers={**headers, "Prefer": "resolution=merge-duplicates,return=minimal"},
         json=rows,
@@ -169,7 +173,8 @@ def push_lots(base_url: str, headers: dict, rows: list[dict]) -> None:
 def mark_expired(base_url: str, headers: dict, lot_nos: list[str]) -> None:
     for i in range(0, len(lot_nos), 200):
         batch = lot_nos[i:i + 200]
-        resp = requests.patch(
+        resp = call_with_retry(
+            requests.patch,
             f"{base_url}/rest/v1/lots",
             headers={**headers, "Prefer": "return=minimal"},
             params={"lot_no": "in.({})".format(",".join(batch))},

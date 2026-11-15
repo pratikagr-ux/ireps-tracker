@@ -36,6 +36,7 @@ import requests
 
 import ireps_core
 from ireps_core import scan
+from net_retry import call_with_retry
 
 ENV_FILE = Path(__file__).parent / ".env.local"
 REQUIRED_KEYS = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")
@@ -87,7 +88,8 @@ def fetch_existing_lots(base_url: str, headers: dict) -> dict[str, dict]:
     out: dict[str, dict] = {}
     offset = 0
     while True:
-        resp = requests.get(
+        resp = call_with_retry(
+            requests.get,
             f"{base_url}/rest/v1/lots",
             headers=headers,
             params={
@@ -151,7 +153,7 @@ def push_lots(base_url: str, headers: dict, rows: list[dict]) -> None:
     url = f"{base_url}/rest/v1/lots"
     upsert_headers = {**headers, "Prefer": "resolution=merge-duplicates,return=minimal"}
     for batch in chunked(rows, UPSERT_BATCH_SIZE):
-        resp = requests.post(url, headers=upsert_headers, json=batch, timeout=60)
+        resp = call_with_retry(requests.post, url, headers=upsert_headers, json=batch, timeout=60)
         if resp.status_code >= 300:
             print(f"  ERROR pushing lots batch: {resp.status_code} {resp.text[:500]}", file=sys.stderr)
             resp.raise_for_status()
@@ -160,7 +162,8 @@ def push_lots(base_url: str, headers: dict, rows: list[dict]) -> None:
 def mark_expired(base_url: str, headers: dict, lot_nos: list[str]) -> None:
     patch_headers = {**headers, "Prefer": "return=minimal"}
     for batch in chunked(lot_nos, EXPIRE_CHUNK_SIZE):
-        resp = requests.patch(
+        resp = call_with_retry(
+            requests.patch,
             f"{base_url}/rest/v1/lots",
             headers=patch_headers,
             params={"lot_no": "in.({})".format(",".join(batch))},
@@ -222,7 +225,8 @@ def push_scan_summary(base_url: str, headers: dict, started_at: str, finished_at
         "updated_count": summary["updated_count"],
         "expired_count": summary["expired_count"],
     }
-    resp = requests.post(
+    resp = call_with_retry(
+        requests.post,
         f"{base_url}/rest/v1/scans", headers={**headers, "Prefer": "return=minimal"}, json=payload, timeout=30
     )
     if resp.status_code >= 300:
@@ -237,7 +241,8 @@ def fetch_watchlisted_lots(base_url: str, headers: dict) -> list[dict]:
     (via the embed filter + !inner) since this fetches ireps.gov.in's own
     per-lot detail page -- a bookmarked Matex lot's lot_id wouldn't mean
     anything there."""
-    resp = requests.get(
+    resp = call_with_retry(
+        requests.get,
         f"{base_url}/rest/v1/bookmarks",
         headers=headers,
         params={"select": "lot_no,lots!inner(lot_id)", "lots.source": "eq.IREPS"},
@@ -265,7 +270,8 @@ def fetch_lots_needing_detail(base_url: str, headers: dict) -> list[dict]:
     changed. Scoped to source='IREPS' -- other sources (e.g. Matex) set
     their own `detail` directly when scraped and must never be sent
     through ireps.gov.in's per-lot detail fetch."""
-    resp = requests.get(
+    resp = call_with_retry(
+        requests.get,
         f"{base_url}/rest/v1/lots",
         headers=headers,
         params={
@@ -306,7 +312,8 @@ def push_lot_detail(base_url: str, headers: dict, max_detail: int | None) -> Non
         except Exception as exc:  # noqa: BLE001
             print(f"  [{i}/{len(targets)}] lot {b['lot_no']}: FAILED ({exc})", file=sys.stderr)
             continue
-        resp = requests.patch(
+        resp = call_with_retry(
+            requests.patch,
             f"{base_url}/rest/v1/lots",
             headers={**headers, "Prefer": "return=minimal"},
             params={"lot_no": f"eq.{b['lot_no']}"},

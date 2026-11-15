@@ -13,6 +13,8 @@ from typing import Iterator
 import requests
 from bs4 import BeautifulSoup
 
+from net_retry import call_with_retry
+
 BASE_URL = "https://ireps.gov.in/eps/viewLotPublishBidderAnon.do"
 AUCTION_PROPS_URL = "https://ireps.gov.in/eps/auctionProperties"
 LOT_DETAIL_URL = "https://ireps.gov.in/eps/auction/viewLotAnon.do"
@@ -53,7 +55,7 @@ def fetch_page(session: requests.Session, page_no: int, rail_unit_name: str, dep
         "toDate": "",
         "auctionStartDate": "",
     }
-    resp = session.post(BASE_URL, data=data, headers=HEADERS, timeout=30)
+    resp = call_with_retry(session.post, BASE_URL, data=data, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     return resp.text
 
@@ -96,8 +98,8 @@ def parse_railway_options(html: str) -> dict[str, str]:
 
 def fetch_depot_ids(session: requests.Session, railway_id: str) -> dict[str, str]:
     """Map depot name -> depot id for a given railway, via the site's own AJAX endpoint."""
-    resp = session.get(
-        AUCTION_PROPS_URL, params={"searchdepots": railway_id}, headers=HEADERS, timeout=30
+    resp = call_with_retry(
+        session.get, AUCTION_PROPS_URL, params={"searchdepots": railway_id}, headers=HEADERS, timeout=30
     )
     resp.raise_for_status()
     parts = [p for p in resp.text.split("^") if p != ""]
@@ -106,8 +108,8 @@ def fetch_depot_ids(session: requests.Session, railway_id: str) -> dict[str, str
 
 def fetch_auction_dates(session: requests.Session, depot_id: str) -> list[str]:
     """Upcoming scheduled auction start date/times for a depot (soonest first)."""
-    resp = session.get(
-        AUCTION_PROPS_URL, params={"searchauctionStartDate": depot_id}, headers=HEADERS, timeout=30
+    resp = call_with_retry(
+        session.get, AUCTION_PROPS_URL, params={"searchauctionStartDate": depot_id}, headers=HEADERS, timeout=30
     )
     resp.raise_for_status()
     text = resp.text.strip()
@@ -157,7 +159,7 @@ class AuctionScheduleLookup:
 
 
 def fetch_lot_detail(session: requests.Session, lot_id: str) -> str:
-    resp = session.get(LOT_DETAIL_URL, params={"lotId": lot_id}, headers=HEADERS, timeout=30)
+    resp = call_with_retry(session.get, LOT_DETAIL_URL, params={"lotId": lot_id}, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     return resp.text
 
