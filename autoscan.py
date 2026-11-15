@@ -82,10 +82,20 @@ def chunked(seq, size):
         yield seq[i : i + size]
 
 
+#: field -> human label, for the diff shown when a lot's change_tag is
+#: "updated" (lots.change_detail). Mirrors ireps_core.TRACKED_FIELDS.
+TRACKED_FIELD_LABELS = {
+    "qty_unit": "Qty/Unit", "category": "Category", "min_incr": "Min Increment",
+    "material_descr": "Material Descr.", "publish_date": "Publish Date", "next_auction": "Next Auction",
+}
+
+
 def fetch_existing_lots(base_url: str, headers: dict) -> dict[str, dict]:
-    """lot_no -> {content_hash, status, first_seen_at} for every lot currently
-    in Supabase, so a fresh scrape can be diffed against it without any
-    local persistence."""
+    """lot_no -> {content_hash, status, first_seen_at, <tracked fields>} for
+    every lot currently in Supabase, so a fresh scrape can be diffed
+    against it (for change_tag, and a field-level change_detail) without
+    any local persistence."""
+    select_fields = "lot_no,content_hash,status,first_seen_at," + ",".join(ireps_core.TRACKED_FIELDS)
     out: dict[str, dict] = {}
     offset = 0
     while True:
@@ -94,7 +104,7 @@ def fetch_existing_lots(base_url: str, headers: dict) -> dict[str, dict]:
             f"{base_url}/rest/v1/lots",
             headers=headers,
             params={
-                "select": "lot_no,content_hash,status,first_seen_at",
+                "select": select_fields,
                 "limit": str(EXISTING_PAGE_SIZE),
                 "offset": str(offset),
             },
@@ -117,6 +127,7 @@ def process_row(row: dict, existing: dict[str, dict], now_iso: str) -> dict:
     including its change_tag, by comparing against the existing snapshot."""
     content_hash = ireps_core.content_hash(row)
     prev = existing.get(row["lot_no"])
+    change_detail = None
     if prev is None:
         change_tag = "new"
         first_seen_at = now_iso
@@ -127,6 +138,12 @@ def process_row(row: dict, existing: dict[str, dict], now_iso: str) -> dict:
             change_tag = "updated"
         else:
             change_tag = "unchanged"
+        if change_tag == "updated":
+            change_detail = {}
+            for field, label in TRACKED_FIELD_LABELS.items():
+                old, new = prev.get(field, ""), row.get(field, "")
+                if old != new:
+                    change_detail[label] = {"from": old, "to": new}
         first_seen_at = prev.get("first_seen_at") or now_iso
     return {
         "lot_no": row["lot_no"],
@@ -142,6 +159,7 @@ def process_row(row: dict, existing: dict[str, dict], now_iso: str) -> dict:
         "next_auction": row.get("next_auction", ""),
         "status": "active",
         "change_tag": change_tag,
+        "change_detail": change_detail,
         "content_hash": content_hash,
         "first_seen_at": first_seen_at,
         "last_seen_at": now_iso,

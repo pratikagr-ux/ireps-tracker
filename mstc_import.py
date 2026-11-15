@@ -69,6 +69,10 @@ DURATION_RE = re.compile(r"^(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})\s+To\s+(\d{2}/
 # (e.g. the search's own category label) doesn't bump change_tag to
 # "updated" on its own.
 _HASH_FIELDS = ["category", "material_descr", "qty_unit", "min_incr", "next_auction"]
+_HASH_FIELD_LABELS = {
+    "category": "Category", "material_descr": "Material Descr.", "qty_unit": "Qty/Unit",
+    "min_incr": "Bid Increment (INR)", "next_auction": "Next Auction",
+}
 
 
 def load_env() -> dict[str, str]:
@@ -199,7 +203,7 @@ def fetch_existing_mstc_lots(base_url: str, headers: dict) -> dict[str, dict]:
             f"{base_url}/rest/v1/lots",
             headers=headers,
             params={
-                "select": "lot_no,content_hash,status,first_seen_at,next_auction",
+                "select": "lot_no,content_hash,status,first_seen_at," + ",".join(_HASH_FIELDS),
                 "source": "eq.MSTC",
                 "limit": str(page_size),
                 "offset": str(offset),
@@ -312,19 +316,26 @@ def main():
         for row in build_lot_rows(raw, pdf_lots):
             row["content_hash"] = content_hash(row)
             prev = existing.get(row["lot_no"])
+            change_detail = None
             if prev is None:
                 change_tag = "new"
                 first_seen_at = now_iso
             else:
                 first_seen_at = prev.get("first_seen_at") or now_iso
                 change_tag = "updated" if (prev["status"] == "expired" or prev["content_hash"] != row["content_hash"]) else "unchanged"
+                if change_tag == "updated":
+                    change_detail = {}
+                    for field, label in _HASH_FIELD_LABELS.items():
+                        old, new = prev.get(field, ""), row.get(field, "")
+                        if old != new:
+                            change_detail[label] = {"from": old, "to": new}
 
             dt = parse_dt(row["next_auction"])
             status = "expired" if dt and dt < now else "active"
             if status == "expired":
                 change_tag = "expired" if change_tag != "new" else "new"
 
-            row.update(status=status, change_tag=change_tag, first_seen_at=first_seen_at, last_seen_at=now_iso)
+            row.update(status=status, change_tag=change_tag, change_detail=change_detail, first_seen_at=first_seen_at, last_seen_at=now_iso)
             tally[change_tag] = tally.get(change_tag, 0) + 1
             payload.append(row)
 

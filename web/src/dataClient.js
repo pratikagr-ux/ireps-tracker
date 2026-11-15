@@ -71,6 +71,25 @@ export async function fetchCategoryCounts(source = '') {
   return Object.fromEntries(Object.entries(counts).sort((a, b) => b[1] - a[1]));
 }
 
+// Lightweight full-dataset pull (material_descr/category/source only, no
+// detail jsonb) across every active lot regardless of source, paginated
+// past the server's max-rows cap -- used for the keyword-suggestion engine
+// and the category explorer, both of which need to see everything at once
+// rather than whatever page/filter happens to be active on the Lots tab.
+export async function fetchActiveLotsSummary() {
+  const out = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from('lots').select('material_descr,category,source')
+      .eq('status', 'active').range(from, from + pageSize - 1);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < pageSize) break;
+  }
+  return out;
+}
+
 export async function fetchLotsByNos(lotNos) {
   if (!lotNos.length) return [];
   const { data, error } = await supabase.from('lots').select('*').in('lot_no', lotNos);
@@ -156,6 +175,20 @@ export async function fetchKeywordMatches(keywords) {
   const { data, error } = await q;
   if (error) throw error;
   return data || [];
+}
+
+// Accurate per-source match count for one keyword -- a head request (no
+// rows returned, just the exact count), since deriving "how many match"
+// from fetchKeywordMatches's own 500-row-capped result would badly
+// undercount a common keyword (most of them, in practice).
+export async function fetchKeywordSourceCount(keyword, source) {
+  const esc = keyword.replace(/[%,]/g, '');
+  let q = supabase.from('lots').select('*', { count: 'exact', head: true }).eq('status', 'active');
+  if (source) q = q.eq('source', source);
+  q = q.or(`material_descr.ilike.%${esc}%,category.ilike.%${esc}%`);
+  const { count, error } = await q;
+  if (error) throw error;
+  return count || 0;
 }
 
 // ── External auctions (MSTC/MJunction/other, per signed-in user) ───────────

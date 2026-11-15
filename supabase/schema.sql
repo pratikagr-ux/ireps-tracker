@@ -257,3 +257,8 @@ create policy "users manage their own sale orders"
 -- so the Lots view can filter All / IREPS / Matex. Existing rows backfill
 -- to 'IREPS' via the column default -- they're the only source so far.
 alter table lots add column if not exists source text not null default 'IREPS';
+
+-- Phase 10: lots.change_detail -- a field-level diff ({field: {from, to}})
+-- computed at scan/import time whenever change_tag becomes 'updated', so
+-- the UI can show exactly what changed instead of just that something did.
+alter table lots add column if not exists change_detail jsonb;
