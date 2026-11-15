@@ -29,6 +29,7 @@ import requests
 
 import matex_core
 from net_retry import call_with_retry
+from pg_filter import pg_in_filter
 
 ENV_FILE = Path(__file__).parent / ".env.local"
 REQUIRED_KEYS = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")
@@ -148,7 +149,7 @@ def mark_expired(base_url: str, headers: dict, lot_nos: list[str]) -> None:
         requests.patch,
         f"{base_url}/rest/v1/lots",
         headers={**headers, "Prefer": "return=minimal"},
-        params={"lot_no": "in.({})".format(",".join(lot_nos))},
+        params={"lot_no": pg_in_filter(lot_nos)},
         json={"status": "expired", "change_tag": "expired"},
         timeout=30,
     )

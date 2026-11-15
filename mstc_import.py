@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Import MSTC (mstcecommerce.com) upcoming-auction rows into Supabase's
-`lots` table (source='MSTC').
+`lots` table (source='MSTC'), enriched with each auction's public
+"Detailed Auction Catalogue" PDF.
 
 Unlike IREPS/Matex, this can never be a cron-style scraper: MSTC's search
 page demands a fresh CAPTCHA on every single query (confirmed by testing --
@@ -13,11 +14,25 @@ Auction -> tick Upcoming Auctions -> All -> Filter by Category -> pick a
 category -> solve the CAPTCHA -- the resulting table is extracted from the
 page and saved as a JSON file, and this script upserts it.
 
-Input JSON: a list of objects, one per result-table row, exactly as shown
-on the page --
+The search results page only gives one row per *auction* (seller/office/
+date), with no material description. But each row's "Download PDF" link
+calls downloadCatalogue(aucid), which POSTs to a public, no-login,
+no-CAPTCHA endpoint that returns a "Detailed Auction Catalogue" PDF listing
+every individual *lot* in that auction, with real material description,
+quantity, pricing and location (see mstc_catalogue.py). So for every
+auction row that carries an "aucid", this fetches and parses that PDF and
+imports one `lots` row per lot (lot_no = "<auction number>#<lot number>"),
+falling back to a single coarse row per auction (the old behaviour) only
+if the PDF couldn't be fetched or parsed, or no aucid was captured.
+
+Input JSON: a list of objects, one per result-table row --
   [{"category": "Iron and steel", "auctionNo": "MSTC/NRO/.../26-27/42861",
     "dateOfAuction": "27/11/2026",
-    "duration": "27/11/2026 11:00:00 To 27/11/2026 15:00:00"}, ...]
+    "duration": "27/11/2026 11:00:00 To 27/11/2026 15:00:00",
+    "aucid": "614261"}, ...]
+(aucid is optional -- extract it from each row's Auction Number link via
+ `tr.querySelector('td:nth-child(3) a[onclick]').getAttribute('onclick')`,
+ which looks like "downloadCatalogue(614261);".)
 
 Each import is necessarily partial (whatever category/filter was searched
 that time), so -- unlike autoscan.py/matex_autoscan.py -- a lot absent from
@@ -25,10 +40,11 @@ one import is never assumed gone. Expiry is instead purely date-based: any
 active MSTC lot (imported now or earlier) whose own auction date has
 already passed is marked expired.
 
-Usage: .venv/bin/python mstc_import.py rows.json
+Usage: .venv/bin/python mstc_import.py rows.json [--limit N]
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -39,13 +55,20 @@ from pathlib import Path
 
 import requests
 
+import mstc_catalogue
 from net_retry import call_with_retry
+from pg_filter import pg_in_filter
 
 ENV_FILE = Path(__file__).parent / ".env.local"
 REQUIRED_KEYS = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")
 MSTC_SEARCH_URL = "https://www.mstcecommerce.com/auctionhome/aucsearch/search.jsp"
 
 DURATION_RE = re.compile(r"^(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})\s+To\s+(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})$")
+
+# Fields that feed each lot row's content_hash -- anything else changing
+# (e.g. the search's own category label) doesn't bump change_tag to
+# "updated" on its own.
+_HASH_FIELDS = ["category", "material_descr", "qty_unit", "min_incr", "next_auction"]
 
 
 def load_env() -> dict[str, str]:
@@ -82,48 +105,88 @@ def parse_dt(value: str) -> datetime | None:
 
 
 def content_hash(row: dict) -> str:
-    raw = f"{row['category']}|{row['next_auction']}"
+    raw = "|".join(str(row.get(f, "")) for f in _HASH_FIELDS)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()
 
 
-def parse_row(raw: dict) -> dict:
+def _auction_office_and_search_category(raw: dict) -> tuple[str, str, str]:
     """Best-effort parse of an Auction Number like
     "MSTC/NRO/COMMANDANT 55 BN SSB PITHORAGARH (UK)/1/Pithoragarh/26-27/42861"
-    into office/seller/location (segments: MSTC/office/seller/lot#/location/
-    fiscal-year/id). A handful have an extra "/" inside the seller/location
-    text which shifts this -- harmless, since the full string, not these
-    parsed display pieces, is the lot's actual identity (lot_no)."""
+    for its office code and seller name (segments: MSTC/office/seller/lot#/
+    location/fiscal-year/id). A handful have an extra "/" inside the
+    seller/location text which shifts this -- harmless, since the full
+    string, not these parsed display pieces, is a lot's actual identity."""
     auction_no = raw["auctionNo"].strip()
     segs = auction_no.split("/")
     office = segs[1] if len(segs) > 1 else ""
     seller = segs[2] if len(segs) > 2 else auction_no
-    location = segs[-3] if len(segs) >= 3 else ""
+    # A few rows repeat the category text twice (e.g. "Iron and steel\nIron
+    # and steel") -- take just the first line.
+    search_category = raw["category"].strip().splitlines()[0].strip()
+    return office, seller, search_category
 
+
+def build_lot_rows(raw: dict, pdf_lots: list[dict] | None) -> list[dict]:
+    """One `lots` row per lot in the auction's catalogue PDF, or a single
+    coarse row for the whole auction if pdf_lots is empty/None (no aucid,
+    or the PDF fetch/parse failed)."""
+    auction_no = raw["auctionNo"].strip()
+    office, seller, search_category = _auction_office_and_search_category(raw)
     m = DURATION_RE.match(raw["duration"].strip())
     next_auction = m.group(1) if m else raw["duration"].strip()
 
-    # A few rows repeat the category text twice (e.g. "Iron and steel\nIron
-    # and steel") -- take just the first line.
-    category = raw["category"].strip().splitlines()[0].strip()
+    if not pdf_lots:
+        return [{
+            "lot_no": auction_no,
+            "lot_id": auction_no,
+            "source": "MSTC",
+            "railway": "",
+            "depot": office,
+            "qty_unit": "",
+            "category": search_category,
+            "min_incr": "",
+            "material_descr": seller,
+            "publish_date": "",
+            "next_auction": next_auction,
+            "detail": {"Office": office, "Auction No.": auction_no},
+        }]
 
-    detail = {"Office": office, "Auction No.": auction_no}
-    if location:
-        detail["Location"] = location
+    rows = []
+    seen_lot_nos: dict[str, int] = {}
+    for lot in pdf_lots:
+        detail = {"Auction No.": auction_no, "Lot No": lot["lot_no"], "Office": office}
+        for key, label in [
+            ("product_type", "Product Type"), ("category", "Category"), ("pcb_group", "PCB Group"),
+            ("description", "Description"), ("item_code", "Item Code"),
+            ("start_price", "Start Price (INR)"), ("bid_increment", "Bid Increment (INR)"),
+            ("post_bid_emd_pct", "Post Bid EMD %"), ("tcs_pct", "TCS %"), ("gst_pct", "GST %"),
+            ("lot_location", "Location"), ("state", "State"), ("bid_valid_till", "Bid Valid Till"),
+        ]:
+            if lot.get(key):
+                detail[label] = lot[key]
 
-    return {
-        "lot_no": auction_no,
-        "lot_id": auction_no,
-        "source": "MSTC",
-        "railway": "",
-        "depot": office,
-        "qty_unit": "",
-        "category": category,
-        "min_incr": "",
-        "material_descr": seller,
-        "publish_date": "",
-        "next_auction": next_auction,
-        "detail": detail,
-    }
+        # MSTC's own catalogue occasionally reuses the same "Lot No" for two
+        # genuinely different lots within one auction (seen in practice: a
+        # duplicated Item Code). Disambiguate rather than silently merging
+        # or dropping one.
+        seen_lot_nos[lot["lot_no"]] = seen_lot_nos.get(lot["lot_no"], 0) + 1
+        suffix = f"-{seen_lot_nos[lot['lot_no']]}" if seen_lot_nos[lot["lot_no"]] > 1 else ""
+
+        rows.append({
+            "lot_no": f"{auction_no}#{lot['lot_no']}{suffix}",
+            "lot_id": auction_no,
+            "source": "MSTC",
+            "railway": "",
+            "depot": office,
+            "qty_unit": lot["quantity"],
+            "category": lot["category"] or search_category,
+            "min_incr": lot["bid_increment"],
+            "material_descr": lot["lot_name"] or seller,
+            "publish_date": "",
+            "next_auction": next_auction,
+            "detail": detail,
+        })
+    return rows
 
 
 def fetch_existing_mstc_lots(base_url: str, headers: dict) -> dict[str, dict]:
@@ -155,19 +218,37 @@ def fetch_existing_mstc_lots(base_url: str, headers: dict) -> dict[str, dict]:
     return out
 
 
+UPSERT_BATCH_SIZE = 300
+
+
 def push_lots(base_url: str, headers: dict, rows: list[dict]) -> None:
-    if not rows:
-        return
-    resp = call_with_retry(
-        requests.post,
-        f"{base_url}/rest/v1/lots",
-        headers={**headers, "Prefer": "resolution=merge-duplicates,return=minimal"},
-        json=rows,
-        timeout=60,
-    )
-    if resp.status_code >= 300:
-        print(f"ERROR pushing MSTC lots: {resp.status_code} {resp.text[:500]}", file=sys.stderr)
-        resp.raise_for_status()
+    for i in range(0, len(rows), UPSERT_BATCH_SIZE):
+        batch = rows[i:i + UPSERT_BATCH_SIZE]
+        resp = call_with_retry(
+            requests.post,
+            f"{base_url}/rest/v1/lots",
+            headers={**headers, "Prefer": "resolution=merge-duplicates,return=minimal"},
+            json=batch,
+            timeout=60,
+        )
+        if resp.status_code >= 300:
+            print(f"ERROR pushing MSTC lots batch: {resp.status_code} {resp.text[:500]}", file=sys.stderr)
+            resp.raise_for_status()
+
+
+def delete_lots(base_url: str, headers: dict, lot_nos: list[str]) -> None:
+    for i in range(0, len(lot_nos), 200):
+        batch = lot_nos[i:i + 200]
+        resp = call_with_retry(
+            requests.delete,
+            f"{base_url}/rest/v1/lots",
+            headers={**headers, "Prefer": "return=minimal"},
+            params={"lot_no": pg_in_filter(batch), "source": "eq.MSTC"},
+            timeout=30,
+        )
+        if resp.status_code >= 300:
+            print(f"ERROR deleting superseded MSTC rows: {resp.status_code} {resp.text[:500]}", file=sys.stderr)
+            resp.raise_for_status()
 
 
 def mark_expired(base_url: str, headers: dict, lot_nos: list[str]) -> None:
@@ -177,7 +258,7 @@ def mark_expired(base_url: str, headers: dict, lot_nos: list[str]) -> None:
             requests.patch,
             f"{base_url}/rest/v1/lots",
             headers={**headers, "Prefer": "return=minimal"},
-            params={"lot_no": "in.({})".format(",".join(batch))},
+            params={"lot_no": pg_in_filter(batch)},
             json={"status": "expired", "change_tag": "expired"},
             timeout=30,
         )
@@ -187,10 +268,14 @@ def mark_expired(base_url: str, headers: dict, lot_nos: list[str]) -> None:
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: mstc_import.py rows.json", file=sys.stderr)
-        sys.exit(1)
-    rows_raw = json.loads(Path(sys.argv[1]).read_text())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("rows_file")
+    parser.add_argument("--limit", type=int, default=None, help="Only process the first N rows (for testing)")
+    args = parser.parse_args()
+
+    rows_raw = json.loads(Path(args.rows_file).read_text())
+    if args.limit is not None:
+        rows_raw = rows_raw[:args.limit]
     if not rows_raw:
         print("No rows in input file -- nothing to do.", file=sys.stderr)
         return
@@ -205,31 +290,57 @@ def main():
 
     payload = []
     tally: dict[str, int] = {}
-    for raw in rows_raw:
-        row = parse_row(raw)
-        row["content_hash"] = content_hash(row)
-        prev = existing.get(row["lot_no"])
-        if prev is None:
-            change_tag = "new"
-            first_seen_at = now_iso
-        else:
-            first_seen_at = prev.get("first_seen_at") or now_iso
-            if prev["status"] == "expired" or prev["content_hash"] != row["content_hash"]:
-                change_tag = "updated"
+    superseded_auction_nos = []  # bare auction-number rows from an older coarse import
+    pdf_ok, pdf_failed = 0, 0
+
+    for n, raw in enumerate(rows_raw, 1):
+        pdf_lots = None
+        aucid = raw.get("aucid")
+        if aucid:
+            try:
+                pdf_bytes = mstc_catalogue.fetch_catalogue_pdf(str(aucid))
+                pdf_lots = mstc_catalogue.parse_catalogue_pdf(pdf_bytes)
+                if pdf_lots:
+                    pdf_ok += 1
+                    superseded_auction_nos.append(raw["auctionNo"].strip())
+                else:
+                    pdf_failed += 1
+            except Exception as exc:  # noqa: BLE001
+                pdf_failed += 1
+                print(f"  [{n}/{len(rows_raw)}] WARNING: catalogue PDF failed for {raw['auctionNo']} (aucid={aucid}): {exc}", file=sys.stderr)
+
+        for row in build_lot_rows(raw, pdf_lots):
+            row["content_hash"] = content_hash(row)
+            prev = existing.get(row["lot_no"])
+            if prev is None:
+                change_tag = "new"
+                first_seen_at = now_iso
             else:
-                change_tag = "unchanged"
+                first_seen_at = prev.get("first_seen_at") or now_iso
+                change_tag = "updated" if (prev["status"] == "expired" or prev["content_hash"] != row["content_hash"]) else "unchanged"
 
-        dt = parse_dt(row["next_auction"])
-        status = "expired" if dt and dt < now else "active"
-        if status == "expired":
-            change_tag = "expired" if change_tag != "new" else "new"
+            dt = parse_dt(row["next_auction"])
+            status = "expired" if dt and dt < now else "active"
+            if status == "expired":
+                change_tag = "expired" if change_tag != "new" else "new"
 
-        row.update(status=status, change_tag=change_tag, first_seen_at=first_seen_at, last_seen_at=now_iso)
-        tally[change_tag] = tally.get(change_tag, 0) + 1
-        payload.append(row)
+            row.update(status=status, change_tag=change_tag, first_seen_at=first_seen_at, last_seen_at=now_iso)
+            tally[change_tag] = tally.get(change_tag, 0) + 1
+            payload.append(row)
+
+        if n % 20 == 0:
+            print(f"  ...processed {n}/{len(rows_raw)} auction(s)", file=sys.stderr)
 
     push_lots(base_url, headers, payload)
-    print(f"Upserted {len(payload)} MSTC row(s): {tally}", file=sys.stderr)
+    print(f"Upserted {len(payload)} MSTC lot row(s) from {len(rows_raw)} auction(s): {tally}", file=sys.stderr)
+    print(f"Catalogue PDFs: {pdf_ok} parsed, {pdf_failed} fell back to a coarse per-auction row.", file=sys.stderr)
+
+    # An auction that now has real per-lot rows supersedes its old
+    # bare-auction-number row from a coarse import, if one exists.
+    to_delete = [a for a in superseded_auction_nos if a in existing]
+    if to_delete:
+        delete_lots(base_url, headers, to_delete)
+        print(f"Removed {len(to_delete)} superseded coarse auction-level row(s).", file=sys.stderr)
 
     # Expire any OTHER active MSTC lot (not touched by this import -- it may
     # just be outside this search's filters) whose own date has passed.
