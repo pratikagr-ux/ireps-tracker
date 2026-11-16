@@ -28,12 +28,26 @@ function sourceLink(row) {
 }
 
 const C = {
-  bg: '#f7f7f8', surf: '#fff', bdr: '#e4e4e7', txt: '#18181b', sub: '#71717a',
+  bg: '#f7f8fa', surf: '#fff', bdr: '#e5e7eb', bdrSoft: '#eef0f3', txt: '#18181b', sub: '#6b7280',
   blue: '#2563eb', green: '#16a34a', red: '#dc2626', amber: '#d97706',
+  // Added for source color-coding (IREPS/Matex/MSTC) and general visual
+  // texture -- distinct hues chosen to stay legible alongside the existing
+  // blue/green/red/amber status palette rather than compete with it.
+  purple: '#7c3aed', teal: '#0d9488',
 };
 
 function Badge({ text, color }) {
   return <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 7px', borderRadius: 999, background: `${color}1a`, color }}>{text}</span>;
+}
+
+// Which auction source a row came from is the single most useful thing to
+// recognise at a glance across every table in the app (far more scannable
+// than reading the word itself), so every "Source" column renders through
+// this one small badge instead of plain text.
+const SOURCE_COLOR = { IREPS: C.blue, Matex: C.purple, MSTC: C.teal, MJunction: C.amber, Other: C.sub };
+function SourceBadge({ source }) {
+  const s = source || 'IREPS';
+  return <Badge text={s} color={SOURCE_COLOR[s] || C.sub} />;
 }
 
 const TAG_COLOR = { new: C.green, updated: C.amber, expired: C.red, unchanged: C.sub };
@@ -1603,26 +1617,45 @@ export default function App() {
 
   const landingItemCount = landingComparison.reduce((n, [, items]) => n + items.length, 0);
 
+  // A small icon per nav tab -- a consistent visual anchor that's faster
+  // to spot while scanning the sidebar than reading each label in full,
+  // and reinforces which section you're in from muscle memory over time.
   const TABS = [
-    { id: 'dashboard', label: 'Dashboard' },
-    { id: 'lots', label: 'Lots' },
-    { id: 'categories', label: 'Categories' },
-    { id: 'keywords', label: 'Keyword Watch' },
-    { id: 'watchlist', label: 'Watchlist', count: bookmarks.length },
-    { id: 'external', label: 'External Auctions', count: externalLots.length },
-    { id: 'landing', label: 'Landing Cost', count: landingItemCount },
-    { id: 'awarded', label: 'Awarded Lots', count: awardedLots.length },
-    { id: 'lifted', label: 'Lifted Material', count: liftedMaterial.length },
-    { id: 'sales', label: 'Sale Orders', count: saleOrders.length },
+    { id: 'dashboard', label: 'Dashboard', icon: '📊' },
+    { id: 'lots', label: 'Lots', icon: '📦' },
+    { id: 'categories', label: 'Categories', icon: '🗂️' },
+    { id: 'keywords', label: 'Keyword Watch', icon: '🔎' },
+    { id: 'watchlist', label: 'Watchlist', icon: '⭐', count: bookmarks.length },
+    { id: 'external', label: 'External Auctions', icon: '🌐', count: externalLots.length },
+    { id: 'landing', label: 'Landing Cost', icon: '💰', count: landingItemCount },
+    { id: 'awarded', label: 'Awarded Lots', icon: '🏆', count: awardedLots.length },
+    { id: 'lifted', label: 'Lifted Material', icon: '🚚', count: liftedMaterial.length },
+    { id: 'sales', label: 'Sale Orders', icon: '🧾', count: saleOrders.length },
   ];
 
   return (
     <div style={{ background: C.bg, minHeight: '100vh', fontFamily: '-apple-system,Segoe UI,Arial,sans-serif', color: C.txt }}>
-      <header className="app-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 22px', background: C.surf, borderBottom: `1px solid ${C.bdr}` }}>
+      <header className="app-header" style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '14px 22px',
+        background: 'linear-gradient(135deg, #ffffff 0%, #f0f4ff 100%)', borderBottom: `1px solid ${C.bdr}`,
+      }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: 16 }}>🚂 Auction Tracker</div>
-          <div style={{ fontSize: 11, color: C.sub }}>
-            {latestScan ? `Last scan: ${new Date(latestScan.finished_at).toLocaleString()} · ${latestScan.total_lots} lots (${latestScan.new_count} new, ${latestScan.updated_count} updated, ${latestScan.expired_count} expired)` : 'No scan data yet'}
+          <div style={{ fontWeight: 700, fontSize: 17, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 20 }}>🚂</span> Auction Tracker
+          </div>
+          <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>
+            {latestScan ? (
+              <>
+                Last scan: {new Date(latestScan.finished_at).toLocaleString()} · {latestScan.total_lots} lots
+                {' ('}
+                <span style={{ color: C.green, fontWeight: 600 }}>{latestScan.new_count} new</span>
+                {', '}
+                <span style={{ color: C.amber, fontWeight: 600 }}>{latestScan.updated_count} updated</span>
+                {', '}
+                <span style={{ color: C.red, fontWeight: 600 }}>{latestScan.expired_count} expired</span>
+                {')'}
+              </>
+            ) : 'No scan data yet'}
           </div>
         </div>
         <button onClick={() => DB.signOut()} style={{ padding: '6px 14px', borderRadius: 6, border: `1px solid ${C.bdr}`, background: '#fff', cursor: 'pointer', fontSize: 12 }}>Sign out</button>
@@ -1631,24 +1664,37 @@ export default function App() {
       {err && <div style={{ margin: 16, padding: 10, background: '#fef2f2', color: C.red, borderRadius: 6, fontSize: 13 }}>{err}</div>}
 
       <div className="app-shell" style={{ display: 'flex', alignItems: 'flex-start' }}>
-        <nav className="app-nav" style={{ width: 190, flexShrink: 0, borderRight: `1px solid ${C.bdr}`, padding: '20px 0' }}>
-          {TABS.map(t => (
-            <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
-              display: 'block', width: '100%', textAlign: 'left', padding: '9px 20px',
-              border: 'none', background: activeTab === t.id ? `${C.blue}14` : 'transparent',
-              borderLeft: `3px solid ${activeTab === t.id ? C.blue : 'transparent'}`,
-              color: activeTab === t.id ? C.blue : C.txt, fontWeight: activeTab === t.id ? 600 : 400,
-              fontSize: 13, cursor: 'pointer',
-            }}>
-              {t.label}{t.count !== undefined ? ` (${t.count})` : ''}
-            </button>
-          ))}
+        <nav className="app-nav" style={{ width: 196, flexShrink: 0, borderRight: `1px solid ${C.bdr}`, padding: '16px 0' }}>
+          {TABS.map(t => {
+            const active = activeTab === t.id;
+            return (
+              <button key={t.id} className={active ? '' : 'nav-btn'} onClick={() => setActiveTab(t.id)} style={{
+                display: 'flex', alignItems: 'center', gap: 9, width: 'calc(100% - 10px)', textAlign: 'left', padding: '9px 16px 9px 17px',
+                margin: '1px 0', border: 'none', borderRadius: '0 999px 999px 0',
+                background: active ? `${C.blue}14` : 'transparent',
+                borderLeft: `3px solid ${active ? C.blue : 'transparent'}`,
+                color: active ? C.blue : C.txt, fontWeight: active ? 600 : 400,
+                fontSize: 13, cursor: 'pointer',
+              }}>
+                <span style={{ fontSize: 14, opacity: active ? 1 : 0.75 }}>{t.icon}</span>
+                <span style={{ flex: 1 }}>{t.label}</span>
+                {t.count !== undefined && (
+                  <span style={{
+                    fontSize: 10.5, fontWeight: 700, color: active ? '#fff' : C.sub,
+                    background: active ? C.blue : C.bdrSoft, borderRadius: 999, padding: '1px 6px', minWidth: 8, textAlign: 'center',
+                  }}>
+                    {t.count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </nav>
         <div className="app-content" style={{ padding: 20, flex: 1, minWidth: 0 }}>
       {activeTab === 'dashboard' && (<>
         <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>New lots matching your keywords</h2>
         <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Found in the most recent scan — from your saved keywords on the Keyword Watch tab.</div>
-        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto', marginBottom: 26 }}>
+        <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto', marginBottom: 26 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
             <thead><FullLotColumnsHeader /></thead>
             <tbody>
@@ -1662,7 +1708,7 @@ export default function App() {
 
         <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Upcoming (next 7 days) matching your keywords</h2>
         <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Keyword matches whose auction falls within the next 7 days, soonest first.</div>
-        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto', marginBottom: 26 }}>
+        <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto', marginBottom: 26 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
             <thead><FullLotColumnsHeader /></thead>
             <tbody>
@@ -1676,7 +1722,7 @@ export default function App() {
 
         <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Upcoming auctions you're participating in</h2>
         <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Watchlist / external lots marked "participating", soonest first.</div>
-        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+        <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
@@ -1689,7 +1735,7 @@ export default function App() {
                 const relistCount = item.kind === 'bookmark' ? item.row.relist_count : 0;
                 return (
                   <tr key={item.key} style={{ borderTop: `1px solid ${C.bdr}` }}>
-                    <td style={td}>{item.source}</td>
+                    <td style={td}><SourceBadge source={item.source} /></td>
                     <td style={td} title={item.lot_no}>{item.lot_no}</td>
                     <td style={td} title={item.material_descr}>{item.material_descr}</td>
                     <td style={{ ...td, whiteSpace: 'normal' }}>
@@ -1732,7 +1778,7 @@ export default function App() {
         </button>
         {summaryErr && <div style={{ fontSize: 12, color: C.red, margin: '10px 0' }}>{summaryErr}</div>}
         {categoryTree && (
-          <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, marginTop: 14 }}>
+          <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', marginTop: 14 }}>
             {categoryTree.map(({ name, total, subs }) => {
               const subTotal = subs.reduce((n, [, c]) => n + c, 0);
               const unlabeled = total - subTotal;
@@ -1806,7 +1852,7 @@ export default function App() {
 
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6, marginTop: 18 }}>Matches</div>
         {keywords.length > 0 && (
-          <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto', marginBottom: 26 }}>
+          <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto', marginBottom: 26 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
               <thead><FullLotColumnsHeader /></thead>
               <tbody>
@@ -1975,21 +2021,21 @@ export default function App() {
 
         {loading && <div className="progress-bar"><div className="progress-bar-fill" /></div>}
 
-        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+        <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
                 <th style={{ ...th, width: '3%' }}></th><th style={{ ...th, width: '3%' }}>★</th>
-                {sourceColumns.some(c => c.id === 'source') && visibleCols.source && <th style={{ ...th, width: '4%' }}>Source</th>}
+                {sourceColumns.some(c => c.id === 'source') && visibleCols.source && <th style={{ ...th, width: '7%' }}>Source</th>}
                 {sourceColumns.some(c => c.id === 'railway') && visibleCols.railway && <th style={{ ...th, width: '7%' }}>Railway</th>}
                 {sourceColumns.some(c => c.id === 'depot') && visibleCols.depot && <th style={{ ...th, width: '7%' }}>{sourceFilters.size === 1 && [...sourceFilters][0] === 'MSTC' ? 'Office' : 'Depot'}</th>}
-                {visibleCols.location && <th style={{ ...th, width: '9%' }}>Location</th>}
+                {visibleCols.location && <th style={{ ...th, width: '8%' }}>Location</th>}
                 <th style={{ ...th, width: '8%' }}>Lot No</th>
                 {visibleCols.qty_unit && <th style={{ ...th, width: '5%' }}>Qty/Unit</th>}
-                {visibleCols.category && <th style={{ ...th, width: '7%' }}>Category</th>}
+                {visibleCols.category && <th style={{ ...th, width: '6%' }}>Category</th>}
                 {visibleCols.material_descr && <th style={th}>Material Descr.</th>}
                 {visibleCols.next_auction && <th style={{ ...th, width: '8%' }}>Next Auction</th>}
-                {visibleCols.tag && <th style={{ ...th, width: '4%' }}>Tag</th>}
+                {visibleCols.tag && <th style={{ ...th, width: '3%' }}>Tag</th>}
                 <th style={{ ...th, width: '8%' }}>Actions</th>
               </tr>
             </thead>
@@ -2000,7 +2046,7 @@ export default function App() {
                   <td style={td}>
                     <button onClick={() => toggleBookmark(row.lot_no)} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 15, color: bookmarkedSet.has(row.lot_no) ? C.amber : C.bdr }}>★</button>
                   </td>
-                  {sourceColumns.some(c => c.id === 'source') && visibleCols.source && <td style={td}>{row.source || 'IREPS'}</td>}
+                  {sourceColumns.some(c => c.id === 'source') && visibleCols.source && <td style={td}><SourceBadge source={row.source} /></td>}
                   {sourceColumns.some(c => c.id === 'railway') && visibleCols.railway && <td style={td}>{row.railway}</td>}
                   {sourceColumns.some(c => c.id === 'depot') && visibleCols.depot && <td style={td}>{row.depot}</td>}
                   {visibleCols.location && <td style={td} title={row.change_tag === 'updated' ? changeTooltip(row) : undefined}>{row.location}</td>}
@@ -2044,7 +2090,7 @@ export default function App() {
             </button>
           </div>
         </div>
-        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+        <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
@@ -2078,7 +2124,7 @@ export default function App() {
           <h2 style={{ fontSize: 15, margin: 0 }}>External Auctions ({externalLots.length})</h2>
           <button onClick={() => setEditExternalLot(null)} style={smallBtn}>Add External Lot</button>
         </div>
-        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+        <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
@@ -2100,7 +2146,7 @@ export default function App() {
 
       {activeTab === 'landing' && (<>
         <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Landing Cost Comparison</h2>
-        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+        <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
@@ -2135,7 +2181,7 @@ export default function App() {
           <h2 style={{ fontSize: 15, margin: 0 }}>Awarded Lots ({awardedLots.length})</h2>
           <button onClick={() => setEditAward(null)} style={smallBtn}>Add Awarded Lot</button>
         </div>
-        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+        <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
@@ -2161,7 +2207,7 @@ export default function App() {
           <h2 style={{ fontSize: 15, margin: 0 }}>Lifted Material ({liftedMaterial.length})</h2>
           <button onClick={() => setEditLifting(null)} style={smallBtn}>Log Lifting</button>
         </div>
-        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+        <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
@@ -2185,7 +2231,7 @@ export default function App() {
           <h2 style={{ fontSize: 15, margin: 0 }}>Sale Orders ({saleOrders.length})</h2>
           <button onClick={() => setEditSaleOrder(null)} style={smallBtn}>Add Sale Order</button>
         </div>
-        <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
+        <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
@@ -2236,7 +2282,7 @@ function SaleOrderRow({ row, onRemove, onEdit }) {
 function AwardedLotRow({ row, onRemove, onEdit, onLogLifting, onSell }) {
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
-      <td style={td}>{row.source}</td>
+      <td style={td}><SourceBadge source={row.source} /></td>
       <td style={td}>{row.lot_no || '-'}</td>
       <td style={{ ...td, maxWidth: 240 }}>{row.title}</td>
       <td style={td}><Badge text={row.status.replace('_', ' ')} color={AWARD_STATUS_COLOR[row.status] || C.sub} /></td>
@@ -2274,7 +2320,7 @@ function ExternalLotRow({ row, onRemove, onEdit, onAward }) {
   const cost = landingCost(row);
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
-      <td style={td}>{row.source}</td>
+      <td style={td}><SourceBadge source={row.source} /></td>
       <td style={td}>{row.external_lot_no || '-'}</td>
       <td style={{ ...td, maxWidth: 240 }}>
         {row.source_url ? (
@@ -2301,7 +2347,7 @@ function WatchlistRow({ row, selected, onToggleSelect, onRemove, onDetails, onEd
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
       <td style={td}><input type="checkbox" checked={!!selected} onChange={onToggleSelect} /></td>
-      <td style={td}>{row.source || 'IREPS'}</td>
+      <td style={td}><SourceBadge source={row.source} /></td>
       <td style={td}>{row.railway}</td>
       <td style={td}>{row.depot}</td>
       <td style={td}>{row.lot_no}</td>
@@ -2398,8 +2444,8 @@ function NextAuctionCell({ row }) {
 function FullLotColumnsHeader() {
   return (
     <tr style={{ background: '#fafafa', textAlign: 'left' }}>
-      <th style={{ ...th, width: '6%' }}>Source</th><th style={{ ...th, width: '9%' }}>Railway</th>
-      <th style={{ ...th, width: '9%' }}>Depot</th><th style={{ ...th, width: '11%' }}>Location</th>
+      <th style={{ ...th, width: '8%' }}>Source</th><th style={{ ...th, width: '8%' }}>Railway</th>
+      <th style={{ ...th, width: '8%' }}>Depot</th><th style={{ ...th, width: '11%' }}>Location</th>
       <th style={{ ...th, width: '9%' }}>Lot No</th><th style={{ ...th, width: '5%' }}>Qty/Unit</th>
       <th style={{ ...th, width: '7%' }}>Category</th>
       <th style={th}>Material Descr.</th><th style={{ ...th, width: '9%' }}>Next Auction</th>
@@ -2411,7 +2457,7 @@ function FullLotColumnsHeader() {
 function FullLotRow({ row, onDetails }) {
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
-      <td style={td}>{row.source || 'IREPS'}</td>
+      <td style={td}><SourceBadge source={row.source} /></td>
       <td style={td}>{row.railway}</td>
       <td style={td}>{row.depot}</td>
       <td style={td} title={row.location}>{row.location}</td>

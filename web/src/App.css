@@ -21,6 +21,40 @@
   100% { margin-left: 100%; }
 }
 
+/* General visual polish -- subtle interactive feedback that plain inline
+   styles can't express (hover/focus/active are pseudo-classes). None of
+   this changes layout, so it's safe to apply globally: buttons/inputs
+   that don't opt in just get the same harmless transition. */
+body { -webkit-font-smoothing: antialiased; }
+
+button { transition: filter 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease; }
+button:hover:not(:disabled) { filter: brightness(0.96); }
+button:active:not(:disabled) { transform: translateY(1px); }
+
+input, select, textarea { transition: border-color 0.15s ease, box-shadow 0.15s ease; }
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+/* Sidebar nav: hover tint on inactive tabs only (the active tab already
+   has its own blue tint via inline style, which -- being set directly on
+   the element -- a plain hover rule can't override without !important;
+   App.jsx only adds this class to tabs that aren't the current one, so
+   that's never actually in conflict here). */
+.nav-btn:hover { background: #f1f3f6 !important; }
+
+/* A gentle highlight so the row under the pointer is obvious when
+   scanning a dense table -- most of this app's content. */
+table tbody tr { transition: background-color 0.1s ease; }
+table tbody tr:hover { background: #fafbfc; }
+
+::-webkit-scrollbar { height: 10px; width: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d4d4d8; border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: #a1a1aa; }
+
 /* Mobile layout overrides. Desktop styling stays inline in App.jsx;
    this file only kicks in at narrow viewports where the structure
    itself (not just sizing) needs to change. */
