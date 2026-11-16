@@ -35,17 +35,22 @@ export function onAuthChange(cb) {
 // Server-side filtering/search via PostgREST, mirroring webapp.py's /lots
 // route (search across lot_no/material_descr/railway/depot, category,
 // change_tag, status filters).
-export async function fetchLots({ search = '', category = '', changeTag = '', status = 'active', source = '', limit = 500 } = {}) {
+export async function fetchLots({ search = '', category = '', changeTag = '', status = 'active', source = '', anyKeywords = [], limit = 500 } = {}) {
   let q = supabase.from('lots').select('*').order('publish_date', { ascending: false }).limit(limit);
   if (status) q = q.eq('status', status);
   if (category) q = q.eq('category', category);
   if (changeTag) q = q.eq('change_tag', changeTag);
   if (source) q = q.eq('source', source);
-  if (search.trim()) {
+  const esc = (s) => s.replace(/[%,]/g, '');
+  if (anyKeywords.length) {
+    // "All Keywords": OR across every saved keyword (matches any one of
+    // them) -- a single .or() call, unlike the AND-across-terms behaviour
+    // below for the free-text search box.
+    q = q.or(anyKeywords.map(k => `material_descr.ilike.%${esc(k)}%,category.ilike.%${esc(k)}%`).join(','));
+  } else if (search.trim()) {
     const terms = search.split(',').map(t => t.trim()).filter(Boolean);
     for (const term of terms) {
-      const esc = term.replace(/[%,]/g, '');
-      q = q.or(`lot_no.ilike.%${esc}%,material_descr.ilike.%${esc}%,railway.ilike.%${esc}%,depot.ilike.%${esc}%`);
+      q = q.or(`lot_no.ilike.%${esc(term)}%,material_descr.ilike.%${esc(term)}%,railway.ilike.%${esc(term)}%,depot.ilike.%${esc(term)}%`);
     }
   }
   const { data, error } = await q;

@@ -10,7 +10,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from './supabaseClient.js';
 import * as DB from './dataClient.js';
-import { describeLocation, decipherCustodian } from './codes.js';
+import { describeLocation, decipherCustodian, CITY_CODES } from './codes.js';
 import { daysToAuction, formatDaysTo } from './dates.js';
 import './App.css';
 
@@ -1138,6 +1138,8 @@ export default function App() {
   const [visibleCols, setVisibleCols] = useState(loadVisibleCols);
   const [expandedCategory, setExpandedCategory] = useState(null);
   const [divisionFilter, setDivisionFilter] = useState('');
+  const [subDivisionFilter, setSubDivisionFilter] = useState('');
+  const [matchAnyKeyword, setMatchAnyKeyword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [keywords, setKeywords] = useState([]);
@@ -1264,9 +1266,26 @@ export default function App() {
     return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 25);
   }, [lots]);
 
-  const visibleLots = useMemo(
+  // Layer 4 (Sub-Division, IREPS only): depots within whichever railway
+  // (Division) is currently selected.
+  const withinDivision = useMemo(
     () => divisionFilter ? lots.filter(r => divisionOf(r) === divisionFilter) : lots,
     [lots, divisionFilter]
+  );
+  const subDivisions = useMemo(() => {
+    if (sourceFilter !== 'IREPS' || !divisionFilter) return [];
+    const counts = {};
+    for (const row of withinDivision) {
+      const d = subDivisionOf(row);
+      if (!d) continue;
+      counts[d] = (counts[d] || 0) + 1;
+    }
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 25);
+  }, [withinDivision, sourceFilter, divisionFilter]);
+
+  const visibleLots = useMemo(
+    () => subDivisionFilter ? withinDivision.filter(r => subDivisionOf(r) === subDivisionFilter) : withinDivision,
+    [withinDivision, subDivisionFilter]
   );
 
   const sourceColumns = columnsForSource(sourceFilter);
@@ -1307,20 +1326,32 @@ export default function App() {
     setLoading(true); setErr('');
     try {
       const [rows, counts, bmSet] = await Promise.all([
-        DB.fetchLots({ search, category, changeTag, status, source: sourceFilter }),
+        DB.fetchLots({
+          search, category, changeTag, status, source: sourceFilter,
+          anyKeywords: matchAnyKeyword ? keywords.map(k => k.keyword) : [],
+        }),
         DB.fetchCategoryCounts(sourceFilter),
         DB.fetchBookmarkedLotNos(),
       ]);
       setLots(rows.map(r => ({ ...r, location: custodianLocation(r) })));
       setCategoryCounts(counts);
       setBookmarkedSet(bmSet);
-      setDivisionFilter(''); // a fresh fetch invalidates whatever division was drilled into
     } catch (e) {
       setErr(e.message || String(e));
     } finally {
       setLoading(false);
     }
-  }, [search, category, changeTag, status, sourceFilter]);
+  }, [search, category, changeTag, status, sourceFilter, matchAnyKeyword, keywords]);
+
+  // Reset the Division/Sub-Division drill-down the moment an upstream
+  // filter changes (synchronously, in the same render) -- not from
+  // loadLots's own completion, which could otherwise race a division
+  // click made while an earlier fetch (e.g. from switching Source) was
+  // still in flight and wipe it out moments after the user made it.
+  useEffect(() => {
+    setDivisionFilter('');
+    setSubDivisionFilter('');
+  }, [sourceFilter, search, category, changeTag, status, matchAnyKeyword]);
 
   const loadMaterialSummary = useCallback(async () => {
     setSummaryLoading(true); setSummaryErr('');
@@ -1755,30 +1786,48 @@ export default function App() {
         {keywords.length > 0 && (
           <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <span style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>Keyword:</span>
-            {[{ keyword: '', id: 'all' }, ...keywords].map(k => {
-              const isActive = k.keyword ? search.trim().toLowerCase() === k.keyword.toLowerCase() : !search.trim();
+            <button onClick={() => { setSearch(''); setMatchAnyKeyword(false); }}
+              style={{
+                padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                border: `1px solid ${!matchAnyKeyword && !search.trim() ? C.amber : C.bdr}`,
+                background: !matchAnyKeyword && !search.trim() ? `${C.amber}1a` : '#fff',
+                color: !matchAnyKeyword && !search.trim() ? C.amber : C.txt,
+              }}>
+              All
+            </button>
+            <button onClick={() => { setSearch(''); setMatchAnyKeyword(true); }}
+              style={{
+                padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                border: `1px solid ${matchAnyKeyword ? C.amber : C.bdr}`,
+                background: matchAnyKeyword ? `${C.amber}1a` : '#fff',
+                color: matchAnyKeyword ? C.amber : C.txt,
+              }}>
+              All Keywords
+            </button>
+            {keywords.map(k => {
+              const isActive = !matchAnyKeyword && search.trim().toLowerCase() === k.keyword.toLowerCase();
               return (
-                <button key={k.id} onClick={() => setSearch(k.keyword)}
+                <button key={k.id} onClick={() => { setSearch(k.keyword); setMatchAnyKeyword(false); }}
                   style={{
                     padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
                     border: `1px solid ${isActive ? C.amber : C.bdr}`,
                     background: isActive ? `${C.amber}1a` : '#fff',
                     color: isActive ? C.amber : C.txt,
                   }}>
-                  {k.keyword || 'All'}
+                  {k.keyword}
                 </button>
               );
             })}
           </div>
         )}
 
-        {/* Layer 3: Division -- depot/office/state, only within one source */}
+        {/* Layer 3: Division -- railway zone (IREPS), city (MSTC), state (Matex) */}
         {sourceFilter && divisions.length > 0 && (
           <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <span style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>
-              {sourceFilter === 'MSTC' ? 'Office:' : sourceFilter === 'Matex' ? 'State:' : 'Division:'}
+              {sourceFilter === 'MSTC' ? 'City:' : sourceFilter === 'Matex' ? 'State:' : 'Division:'}
             </span>
-            <button onClick={() => setDivisionFilter('')}
+            <button onClick={() => { setDivisionFilter(''); setSubDivisionFilter(''); }}
               style={{
                 padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
                 border: `1px solid ${!divisionFilter ? C.green : C.bdr}`,
@@ -1787,11 +1836,36 @@ export default function App() {
               All ({lots.length})
             </button>
             {divisions.map(([name, count]) => (
-              <button key={name} onClick={() => setDivisionFilter(name)}
+              <button key={name} onClick={() => { setDivisionFilter(name); setSubDivisionFilter(''); }}
                 style={{
                   padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
                   border: `1px solid ${divisionFilter === name ? C.green : C.bdr}`,
                   background: divisionFilter === name ? `${C.green}1a` : '#fff', color: divisionFilter === name ? C.green : C.txt,
+                }}>
+                {name} ({count})
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Layer 4: Sub-Division -- IREPS depots within the selected railway */}
+        {sourceFilter === 'IREPS' && divisionFilter && subDivisions.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>Sub-Division:</span>
+            <button onClick={() => setSubDivisionFilter('')}
+              style={{
+                padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                border: `1px solid ${!subDivisionFilter ? C.red : C.bdr}`,
+                background: !subDivisionFilter ? `${C.red}1a` : '#fff', color: !subDivisionFilter ? C.red : C.txt,
+              }}>
+              All ({withinDivision.length})
+            </button>
+            {subDivisions.map(([name, count]) => (
+              <button key={name} onClick={() => setSubDivisionFilter(name)}
+                style={{
+                  padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                  border: `1px solid ${subDivisionFilter === name ? C.red : C.bdr}`,
+                  background: subDivisionFilter === name ? `${C.red}1a` : '#fff', color: subDivisionFilter === name ? C.red : C.txt,
                 }}>
                 {name} ({count})
               </button>
@@ -2244,13 +2318,21 @@ function columnsForSource(source) {
   return LOT_COLUMNS; // IREPS or All (mixed) -- show everything
 }
 
-// Layer 3 of the Lots tab's Source > Keyword > Division drill-down: the
-// administrative subdivision a lot's custodian belongs to, which is a
-// different field depending on source (IREPS: depot name; MSTC: its
-// office code, already stored in `depot`; Matex: only ever gives us a
-// state, stored in `location`).
+// Layer 3 of the Lots tab's Source > Keyword > Division (> Sub-Division)
+// drill-down: for IREPS this is the railway zone (depot is the finer
+// Sub-Division layer below it); MSTC has no such two-level structure, so
+// its office code is deciphered to the full city name and used directly;
+// Matex only ever gives us a state.
 function divisionOf(row) {
   if (row.source === 'Matex') return row.location || '';
+  if (row.source === 'MSTC') return CITY_CODES[row.depot] || row.depot || '';
+  return row.railway || ''; // IREPS
+}
+
+// Layer 4, IREPS only: the depot within whichever railway (Division) was
+// picked above.
+function subDivisionOf(row) {
+  if (row.source && row.source !== 'IREPS') return '';
   return row.depot || '';
 }
 
@@ -2302,36 +2384,99 @@ const KEYWORD_STOPWORDS = new Set([
   'old', 'new', 'type', 'types', 'size', 'sizes', 'kind', 'kinds', 'piece', 'pieces',
   'depot', 'non', 'consisting', 'sort', 'mtr', 'mtrs', 'cond', 'stock', 'including',
   'total', 'approximately', 'approx', 'nearly', 'about', 'more', 'less', 'than',
+  // Boilerplate/fragments/test-data artifacts, not material names.
+  'created', 'selenium', 'actual', 'lying', 'cut', 'auction', 'matex', 'details',
+  'cat', 'iii', 'unsv', 'comp', 'structure', 'scraps', 'tms', 'sale', 'intimation',
+  'letter', 'annexure', 'click', 'here', 'enclosed', 'format', 'rate', 'quantity',
+  'given', 'without', 'above', 'remarks', 'descriptionmaterial',
 ]);
+
+// A curated vocabulary of specific Indian Railways / industrial scrap
+// material and equipment terms, checked for actual presence in the data
+// (any count >= 1) rather than ranked by frequency -- some of these (e.g.
+// "fish plate", "trolley") are real, specific things worth watching for
+// even when rare, and would never surface in a frequency-ranked top-N
+// list crowded out by far more common words.
+const KNOWN_DOMAIN_TERMS = [
+  'wagon', 'trolley', 'fish plate', 'melting', 'bogie', 'axle', 'girder', 'sleeper',
+  'coupling', 'spring', 'bearing', 'insulator', 'conductor', 'transformer', 'bolt', 'nut',
+  'washer', 'pipe', 'tube', 'sheet', 'coil', 'ingot', 'billet', 'rod', 'mesh', 'chassis',
+  'wheel', 'bush', 'gear', 'motor', 'generator', 'compressor', 'pump', 'valve', 'relay',
+  'fuse', 'breaker', 'panel', 'cabinet', 'container', 'cylinder', 'filter', 'radiator',
+  'condenser', 'fan', 'gasket', 'clutch', 'brake', 'shaft', 'crank', 'piston', 'buffer',
+  'coupler', 'crossing', 'signal', 'locomotive', 'coach', 'points', 'girders', 'angle',
+  'channel', 'plate', 'chair', 'clip', 'pad', 'bridge', 'crane', 'hoist', 'forklift',
+  'ladder', 'switchgear', 'alternator', 'armature', 'winding', 'stator', 'rotor', 'guide',
+  'roller', 'bracket', 'clamp', 'lock', 'grill',
+];
+
+function suggestKnownTermsFrom(rows, existingKeywords) {
+  const existing = new Set(existingKeywords.map(k => k.toLowerCase()));
+  const terms = KNOWN_DOMAIN_TERMS.filter(t => !existing.has(t));
+  const counts = Object.fromEntries(terms.map(t => [t, 0]));
+  for (const row of rows) {
+    const text = `${row.material_descr || ''} ${row.category || ''}`.toLowerCase();
+    for (const term of terms) {
+      if (text.includes(term)) counts[term]++;
+    }
+  }
+  return Object.entries(counts).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+}
 
 // Suggests candidate keywords by frequency-counting words in material
 // descriptions across every active lot in every source, excluding generic
 // filler and whatever's already saved -- so the list is specific terms
 // (material/equipment names) that actually distinguish one lot from
 // another, not noise that's in every row anyway.
-function suggestKeywordsFrom(rows, existingKeywords, limit = 24) {
+function suggestKeywordsFrom(rows, existingKeywords, limit = 60) {
   const existing = new Set(existingKeywords.map(k => k.toLowerCase()));
   const freq = {};
   for (const row of rows) {
     const text = `${row.material_descr || ''} ${row.category || ''}`.toLowerCase();
-    const words = text.match(/[a-z]{3,}/g) || [];
+    // Split on real word boundaries, then reject (not truncate) anything
+    // outside 3-15 letters -- a few test-data rows have run-on placeholder
+    // text ("DescriptionMaterial DescriptionMaterial...") with no word
+    // breaks at all, which would otherwise match as one long "word" (or,
+    // worse, get chopped into equally meaningless fixed-length fragments).
+    const words = (text.match(/[a-z]+/g) || []).filter(w => w.length >= 3 && w.length <= 15);
     const seenInRow = new Set();
-    for (const w of words) {
-      if (KEYWORD_STOPWORDS.has(w) || existing.has(w) || seenInRow.has(w)) continue;
-      seenInRow.add(w);
-      freq[w] = (freq[w] || 0) + 1;
+    for (let i = 0; i < words.length; i++) {
+      const w = words[i];
+      const wIsNoise = KEYWORD_STOPWORDS.has(w);
+      if (!wIsNoise && !existing.has(w) && !seenInRow.has(w)) {
+        seenInRow.add(w);
+        freq[w] = (freq[w] || 0) + 1;
+      }
+      // Also count two-word phrases (e.g. "fish plate") -- a single
+      // material name is often two words, and neither half alone would
+      // necessarily be frequent enough to surface on its own.
+      if (!wIsNoise && i + 1 < words.length) {
+        const w2 = words[i + 1];
+        if (!KEYWORD_STOPWORDS.has(w2)) {
+          const bigram = `${w} ${w2}`;
+          if (!existing.has(bigram) && !seenInRow.has(bigram)) {
+            seenInRow.add(bigram);
+            freq[bigram] = (freq[bigram] || 0) + 1;
+          }
+        }
+      }
     }
   }
   return Object.entries(freq)
-    .filter(([, n]) => n >= 2)
+    .filter(([term, n]) => term.includes(' ') ? n >= 3 : n >= 2) // bigrams need a bit more support to avoid noise
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit);
 }
 
 function KeywordSuggestions({ existingKeywords, onAdd, summary, loading, err, onLoad }) {
+  const existingList = useMemo(() => existingKeywords.map(k => k.keyword), [existingKeywords]);
   const suggestions = useMemo(
-    () => summary ? suggestKeywordsFrom(summary, existingKeywords.map(k => k.keyword)) : null,
-    [summary, existingKeywords]
+    () => summary ? suggestKeywordsFrom(summary, existingList) : null,
+    [summary, existingList]
+  );
+  const knownTerms = useMemo(
+    () => summary ? suggestKnownTermsFrom(summary, existingList) : null,
+    [summary, existingList]
   );
 
   return (
@@ -2343,15 +2488,35 @@ function KeywordSuggestions({ existingKeywords, onAdd, summary, loading, err, on
         </button>
       </div>
       {err && <div style={{ fontSize: 12, color: C.red, marginBottom: 8 }}>{err}</div>}
-      {suggestions && (
-        suggestions.length ? (
+
+      {knownTerms && knownTerms.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11, color: C.sub, marginBottom: 6 }}>
+            Railway/scrap-specific terms found in your data (checked for any presence, not just the most frequent):
+          </div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {suggestions.map(([word, count]) => (
+            {knownTerms.map(([word, count]) => (
               <button key={word} onClick={() => onAdd(word)}
-                style={{ fontSize: 12, padding: '4px 10px', borderRadius: 999, border: `1px dashed ${C.blue}`, background: '#fff', color: C.blue, cursor: 'pointer' }}>
+                style={{ fontSize: 12, padding: '4px 10px', borderRadius: 999, border: `1px dashed ${C.green}`, background: '#fff', color: C.green, cursor: 'pointer' }}>
                 + {word} ({count})
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {suggestions && (
+        suggestions.length ? (
+          <div>
+            <div style={{ fontSize: 11, color: C.sub, marginBottom: 6 }}>Most frequent other terms across your data:</div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {suggestions.map(([word, count]) => (
+                <button key={word} onClick={() => onAdd(word)}
+                  style={{ fontSize: 12, padding: '4px 10px', borderRadius: 999, border: `1px dashed ${C.blue}`, background: '#fff', color: C.blue, cursor: 'pointer' }}>
+                  + {word} ({count})
+                </button>
+              ))}
+            </div>
           </div>
         ) : (
           <div style={{ fontSize: 12, color: C.sub }}>No new suggestions found — your saved keywords already cover the common terms.</div>
