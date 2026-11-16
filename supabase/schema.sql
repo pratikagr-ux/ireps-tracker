@@ -262,3 +262,11 @@ alter table lots add column if not exists source text not null default 'IREPS';
 -- computed at scan/import time whenever change_tag becomes 'updated', so
 -- the UI can show exactly what changed instead of just that something did.
 alter table lots add column if not exists change_detail jsonb;
+
+-- Phase 11: lots.relist_count -- a persistent counter, carried forward
+-- across scans/imports and incremented by autoscan.py/matex_autoscan.py/
+-- mstc_import.py whenever a lot's own next_auction date changes to a new
+-- non-blank value (i.e. it didn't sell at its previous auction and got put
+-- up again). change_detail only ever holds the most recent diff, so this
+-- is what lets the UI say "relisted N times" rather than just "changed".
+alter table lots add column if not exists relist_count int not null default 0;

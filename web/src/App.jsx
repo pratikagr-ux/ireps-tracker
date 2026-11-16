@@ -54,6 +54,17 @@ function parseNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+// Shared click handler for every multi-select filter-tab row (Source,
+// Division, Sub-Division, Keyword tabs): toggles one value's membership in
+// its layer's Set, leaving every other selected value alone.
+function toggleInSet(setFn, value) {
+  setFn(prev => {
+    const next = new Set(prev);
+    if (next.has(value)) next.delete(value); else next.add(value);
+    return next;
+  });
+}
+
 // target rate + estimated lifting/transport expenses -- what the lot would
 // actually cost us if we win it at our target, before we ever place a bid.
 function landingCost(row) {
@@ -1131,15 +1142,18 @@ export default function App() {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
   const [status, setStatus] = useState('active');
-  const [sourceFilter, setSourceFilter] = useState('');
+  // Layer 1-4 of the Lots tab's drill-down are all multi-select: each is a
+  // Set of chosen values (OR'd together within its own layer), empty =
+  // "All" for that layer. toggleInSet below is the shared click handler.
+  const [sourceFilters, setSourceFilters] = useState(new Set());
   const [changeTag, setChangeTag] = useState('');
   const [selected, setSelected] = useState(new Set());
   const [selectedWatch, setSelectedWatch] = useState(new Set());
   const [visibleCols, setVisibleCols] = useState(loadVisibleCols);
   const [expandedCategory, setExpandedCategory] = useState(null);
-  const [divisionFilter, setDivisionFilter] = useState('');
-  const [subDivisionFilter, setSubDivisionFilter] = useState('');
-  const [matchAnyKeyword, setMatchAnyKeyword] = useState(false);
+  const [divisionFilters, setDivisionFilters] = useState(new Set());
+  const [subDivisionFilters, setSubDivisionFilters] = useState(new Set());
+  const [selectedKeywordTabs, setSelectedKeywordTabs] = useState(new Set());
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
   const [keywords, setKeywords] = useState([]);
@@ -1255,7 +1269,8 @@ export default function App() {
   // Lots tab, layer 3 (Division): distinct divisions within the currently
   // loaded (source/category/status/search-filtered) lots, by count --
   // capped so a source with hundreds of depots doesn't produce hundreds of
-  // tabs. divisionFilter itself then narrows what's actually rendered.
+  // tabs. divisionFilters itself then narrows what's actually rendered --
+  // multi-select, so any division in the set (OR'd together) matches.
   const divisions = useMemo(() => {
     const counts = {};
     for (const row of lots) {
@@ -1267,13 +1282,16 @@ export default function App() {
   }, [lots]);
 
   // Layer 4 (Sub-Division, IREPS only): depots within whichever railway
-  // (Division) is currently selected.
+  // (Division/-ies) is currently selected.
   const withinDivision = useMemo(
-    () => divisionFilter ? lots.filter(r => divisionOf(r) === divisionFilter) : lots,
-    [lots, divisionFilter]
+    () => divisionFilters.size ? lots.filter(r => divisionFilters.has(divisionOf(r))) : lots,
+    [lots, divisionFilters]
   );
+  // No explicit source check needed here: subDivisionOf is '' for every
+  // non-IREPS row, so a division made up entirely of MSTC/Matex rows simply
+  // yields no sub-divisions and the row stays hidden on its own.
   const subDivisions = useMemo(() => {
-    if (sourceFilter !== 'IREPS' || !divisionFilter) return [];
+    if (!divisionFilters.size) return [];
     const counts = {};
     for (const row of withinDivision) {
       const d = subDivisionOf(row);
@@ -1281,14 +1299,14 @@ export default function App() {
       counts[d] = (counts[d] || 0) + 1;
     }
     return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 25);
-  }, [withinDivision, sourceFilter, divisionFilter]);
+  }, [withinDivision, divisionFilters]);
 
   const visibleLots = useMemo(
-    () => subDivisionFilter ? withinDivision.filter(r => subDivisionOf(r) === subDivisionFilter) : withinDivision,
-    [withinDivision, subDivisionFilter]
+    () => subDivisionFilters.size ? withinDivision.filter(r => subDivisionFilters.has(subDivisionOf(r))) : withinDivision,
+    [withinDivision, subDivisionFilters]
   );
 
-  const sourceColumns = columnsForSource(sourceFilter);
+  const sourceColumns = columnsForSources(sourceFilters);
 
   // Dashboard: auctions (IREPS watchlist + external) we've marked ourselves
   // down to participate in, soonest first.
@@ -1322,15 +1340,23 @@ export default function App() {
     return DB.onAuthChange(setSession);
   }, []);
 
+  // Note: `keywords` is deliberately NOT a dependency here -- anyKeywords
+  // comes from selectedKeywordTabs (what the user has actually toggled
+  // on), not from the full saved-keywords list. Depending on `keywords`
+  // itself used to create a feedback loop: the sign-in effect reloads
+  // keywords and lots together, loadKeywords hands back a new array
+  // reference every time (even with identical content), which changed
+  // loadLots's identity, which re-ran that same effect -- an infinite
+  // "Loading…"/"Refresh" flicker with no actual filter change involved.
   const loadLots = useCallback(async () => {
     setLoading(true); setErr('');
     try {
       const [rows, counts, bmSet] = await Promise.all([
         DB.fetchLots({
-          search, category, changeTag, status, source: sourceFilter,
-          anyKeywords: matchAnyKeyword ? keywords.map(k => k.keyword) : [],
+          search, category, changeTag, status, sources: [...sourceFilters],
+          anyKeywords: [...selectedKeywordTabs],
         }),
-        DB.fetchCategoryCounts(sourceFilter),
+        DB.fetchCategoryCounts([...sourceFilters]),
         DB.fetchBookmarkedLotNos(),
       ]);
       setLots(rows.map(r => ({ ...r, location: custodianLocation(r) })));
@@ -1341,7 +1367,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [search, category, changeTag, status, sourceFilter, matchAnyKeyword, keywords]);
+  }, [search, category, changeTag, status, sourceFilters, selectedKeywordTabs]);
 
   // Reset the Division/Sub-Division drill-down the moment an upstream
   // filter changes (synchronously, in the same render) -- not from
@@ -1349,9 +1375,9 @@ export default function App() {
   // click made while an earlier fetch (e.g. from switching Source) was
   // still in flight and wipe it out moments after the user made it.
   useEffect(() => {
-    setDivisionFilter('');
-    setSubDivisionFilter('');
-  }, [sourceFilter, search, category, changeTag, status, matchAnyKeyword]);
+    setDivisionFilters(new Set());
+    setSubDivisionFilters(new Set());
+  }, [sourceFilters, search, category, changeTag, status, selectedKeywordTabs]);
 
   const loadMaterialSummary = useCallback(async () => {
     setSummaryLoading(true); setSummaryErr('');
@@ -1418,9 +1444,12 @@ export default function App() {
     }
   }, []);
 
+  // One-time load of everything else on sign-in. loadLots is deliberately
+  // run from its own effect below (keyed to the actual filter values)
+  // rather than listed here -- see the comment on loadLots for why mixing
+  // the two caused an infinite reload loop.
   useEffect(() => {
     if (session) {
-      loadLots();
       loadBookmarks();
       loadKeywords();
       loadExternalLots();
@@ -1429,7 +1458,15 @@ export default function App() {
       loadSaleOrders();
       DB.fetchLatestScan().then(setLatestScan).catch(() => {});
     }
-  }, [session, loadLots, loadBookmarks, loadKeywords, loadExternalLots, loadAwardedLots, loadLiftedMaterial, loadSaleOrders]);
+  }, [session, loadBookmarks, loadKeywords, loadExternalLots, loadAwardedLots, loadLiftedMaterial, loadSaleOrders]);
+
+  // Lots tab: (re)load whenever the user signs in or actually changes a
+  // filter -- loadLots's own useCallback deps are the real primitive
+  // filter values, not derived state like `keywords`, so this only fires
+  // on a genuine change.
+  useEffect(() => {
+    if (session) loadLots();
+  }, [session, loadLots]);
 
   useEffect(() => {
     if (!session || !keywords.length) { setKeywordMatches([]); return; }
@@ -1534,7 +1571,7 @@ export default function App() {
 
   const jumpToCategory = (catString) => {
     setCategory(catString);
-    setSourceFilter('');
+    setSourceFilters(new Set());
     setActiveTab('lots');
   };
 
@@ -1612,13 +1649,13 @@ export default function App() {
         <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>New lots matching your keywords</h2>
         <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Found in the most recent scan — from your saved keywords on the Keyword Watch tab.</div>
         <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto', marginBottom: 26 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
             <thead><FullLotColumnsHeader /></thead>
             <tbody>
               {newKeywordMatches.map(row => (
                 <FullLotRow key={row.lot_no} row={row} onDetails={() => setDetailLot(row)} />
               ))}
-              {!newKeywordMatches.length && <tr><td colSpan={11} style={{ ...td, textAlign: 'center', color: C.sub }}>No new lots from the last scan match your saved keywords.</td></tr>}
+              {!newKeywordMatches.length && <tr><td colSpan={10} style={{ ...td, whiteSpace: 'normal', textAlign: 'center', color: C.sub }}>No new lots from the last scan match your saved keywords.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1626,13 +1663,13 @@ export default function App() {
         <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Upcoming (next 7 days) matching your keywords</h2>
         <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Keyword matches whose auction falls within the next 7 days, soonest first.</div>
         <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto', marginBottom: 26 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
             <thead><FullLotColumnsHeader /></thead>
             <tbody>
               {upcomingKeywordMatches.map(row => (
                 <FullLotRow key={row.lot_no} row={row} onDetails={() => setDetailLot(row)} />
               ))}
-              {!upcomingKeywordMatches.length && <tr><td colSpan={11} style={{ ...td, textAlign: 'center', color: C.sub }}>No keyword matches auctioning in the next 7 days.</td></tr>}
+              {!upcomingKeywordMatches.length && <tr><td colSpan={10} style={{ ...td, whiteSpace: 'normal', textAlign: 'center', color: C.sub }}>No keyword matches auctioning in the next 7 days.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1640,29 +1677,46 @@ export default function App() {
         <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Upcoming auctions you're participating in</h2>
         <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Watchlist / external lots marked "participating", soonest first.</div>
         <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
-                <th style={th}>Source</th><th style={th}>Lot No</th><th style={th}>Material Descr.</th>
-                <th style={th}>Auction</th><th style={th}>Days To</th><th style={th}>Actions</th>
+                <th style={{ ...th, width: '8%' }}>Source</th><th style={{ ...th, width: '14%' }}>Lot No</th><th style={th}>Material Descr.</th>
+                <th style={{ ...th, width: '15%' }}>Auction</th><th style={{ ...th, width: '12%' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {upcomingParticipating.map(item => (
-                <tr key={item.key} style={{ borderTop: `1px solid ${C.bdr}` }}>
-                  <td style={td}>{item.source}</td>
-                  <td style={td}>{item.lot_no}</td>
-                  <td style={{ ...clipTd, maxWidth: 320 }} title={item.material_descr}>{item.material_descr}</td>
-                  <td style={td}>{item.when}</td>
-                  <td style={td}>{formatDaysTo(item.days)}</td>
-                  <td style={td}>
-                    {item.kind === 'bookmark'
-                      ? <button onClick={() => setDetailLot(item.row)} style={smallBtn}>Details</button>
-                      : <button onClick={() => setEditExternalLot(item.row)} style={smallBtn}>Edit</button>}
-                  </td>
-                </tr>
-              ))}
-              {!upcomingParticipating.length && <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: C.sub }}>Nothing marked "participating" yet.</td></tr>}
+              {upcomingParticipating.map(item => {
+                const relistCount = item.kind === 'bookmark' ? item.row.relist_count : 0;
+                return (
+                  <tr key={item.key} style={{ borderTop: `1px solid ${C.bdr}` }}>
+                    <td style={td}>{item.source}</td>
+                    <td style={td} title={item.lot_no}>{item.lot_no}</td>
+                    <td style={td} title={item.material_descr}>{item.material_descr}</td>
+                    <td style={{ ...td, whiteSpace: 'normal' }}>
+                      <div style={{ fontWeight: 700 }}>{item.when}</div>
+                      <div style={{ display: 'flex', gap: 5, alignItems: 'center', marginTop: 2, flexWrap: 'wrap' }}>
+                        {item.days !== null && (
+                          <span style={{ fontSize: 10.5, fontWeight: 700, color: dayBadgeColor(item.days) }}>{formatDaysTo(item.days)}</span>
+                        )}
+                        {relistCount > 0 && (
+                          <span title={relistTooltip(item.row)} style={{
+                            fontSize: 10, fontWeight: 700, color: C.amber, background: `${C.amber}1a`,
+                            borderRadius: 999, padding: '1px 5px', cursor: 'help',
+                          }}>
+                            ↻ {relistCount}×
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td style={{ ...td, whiteSpace: 'normal' }}>
+                      {item.kind === 'bookmark'
+                        ? <button onClick={() => setDetailLot(item.row)} style={smallBtn}>Details</button>
+                        : <button onClick={() => setEditExternalLot(item.row)} style={smallBtn}>Edit</button>}
+                    </td>
+                  </tr>
+                );
+              })}
+              {!upcomingParticipating.length && <tr><td colSpan={5} style={{ ...td, whiteSpace: 'normal', textAlign: 'center', color: C.sub }}>Nothing marked "participating" yet.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -1753,13 +1807,13 @@ export default function App() {
         <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6, marginTop: 18 }}>Matches</div>
         {keywords.length > 0 && (
           <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto', marginBottom: 26 }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
               <thead><FullLotColumnsHeader /></thead>
               <tbody>
                 {keywordMatches.map(row => (
                   <FullLotRow key={row.lot_no} row={row} onDetails={() => setDetailLot(row)} />
                 ))}
-                {!keywordMatches.length && <tr><td colSpan={11} style={{ ...td, textAlign: 'center', color: C.sub }}>No active lots match your keywords yet.</td></tr>}
+                {!keywordMatches.length && <tr><td colSpan={10} style={{ ...td, whiteSpace: 'normal', textAlign: 'center', color: C.sub }}>No active lots match your keywords yet.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -1767,47 +1821,55 @@ export default function App() {
       </>)}
 
       {activeTab === 'lots' && (<>
-        {/* Layer 1: Source */}
+        {/* Layer 1: Source -- multi-select; "All sources" clears the set */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
-          {[{ id: '', label: 'All sources' }, { id: 'IREPS', label: 'IREPS' }, { id: 'Matex', label: 'Matex' }, { id: 'MSTC', label: 'MSTC' }].map(s => (
-            <button key={s.id} onClick={() => { setSourceFilter(s.id); setCategory(''); }}
-              style={{
-                padding: '6px 14px', borderRadius: 999, fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
-                border: `1px solid ${sourceFilter === s.id ? C.blue : C.bdr}`,
-                background: sourceFilter === s.id ? C.blue : '#fff',
-                color: sourceFilter === s.id ? '#fff' : C.txt,
-              }}>
-              {s.label}
-            </button>
-          ))}
+          {[{ id: '', label: 'All sources' }, { id: 'IREPS', label: 'IREPS' }, { id: 'Matex', label: 'Matex' }, { id: 'MSTC', label: 'MSTC' }].map(s => {
+            const active = s.id === '' ? sourceFilters.size === 0 : sourceFilters.has(s.id);
+            return (
+              <button key={s.id || 'all'} onClick={() => {
+                if (s.id === '') setSourceFilters(new Set()); else toggleInSet(setSourceFilters, s.id);
+                setCategory('');
+              }}
+                style={{
+                  padding: '6px 14px', borderRadius: 999, fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
+                  border: `1px solid ${active ? C.blue : C.bdr}`,
+                  background: active ? C.blue : '#fff',
+                  color: active ? '#fff' : C.txt,
+                }}>
+                {s.label}
+              </button>
+            );
+          })}
         </div>
 
-        {/* Layer 2: Keyword (one tab per saved keyword; "All" clears it) */}
+        {/* Layer 2: Keyword -- multi-select, independent of the free-text
+            search box below (the two combine with AND: e.g. search
+            "sambalpur" + keyword tab "60kg" narrows to lots matching both). */}
         {keywords.length > 0 && (
           <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <span style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>Keyword:</span>
-            <button onClick={() => { setSearch(''); setMatchAnyKeyword(false); }}
+            <button onClick={() => setSelectedKeywordTabs(new Set())}
               style={{
                 padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                border: `1px solid ${!matchAnyKeyword && !search.trim() ? C.amber : C.bdr}`,
-                background: !matchAnyKeyword && !search.trim() ? `${C.amber}1a` : '#fff',
-                color: !matchAnyKeyword && !search.trim() ? C.amber : C.txt,
+                border: `1px solid ${!selectedKeywordTabs.size ? C.amber : C.bdr}`,
+                background: !selectedKeywordTabs.size ? `${C.amber}1a` : '#fff',
+                color: !selectedKeywordTabs.size ? C.amber : C.txt,
               }}>
               All
             </button>
-            <button onClick={() => { setSearch(''); setMatchAnyKeyword(true); }}
+            <button onClick={() => setSelectedKeywordTabs(new Set(keywords.map(k => k.keyword)))}
               style={{
                 padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                border: `1px solid ${matchAnyKeyword ? C.amber : C.bdr}`,
-                background: matchAnyKeyword ? `${C.amber}1a` : '#fff',
-                color: matchAnyKeyword ? C.amber : C.txt,
+                border: `1px solid ${selectedKeywordTabs.size === keywords.length ? C.amber : C.bdr}`,
+                background: selectedKeywordTabs.size === keywords.length ? `${C.amber}1a` : '#fff',
+                color: selectedKeywordTabs.size === keywords.length ? C.amber : C.txt,
               }}>
               All Keywords
             </button>
             {keywords.map(k => {
-              const isActive = !matchAnyKeyword && search.trim().toLowerCase() === k.keyword.toLowerCase();
+              const isActive = selectedKeywordTabs.has(k.keyword);
               return (
-                <button key={k.id} onClick={() => { setSearch(k.keyword); setMatchAnyKeyword(false); }}
+                <button key={k.id} onClick={() => toggleInSet(setSelectedKeywordTabs, k.keyword)}
                   style={{
                     padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
                     border: `1px solid ${isActive ? C.amber : C.bdr}`,
@@ -1821,51 +1883,57 @@ export default function App() {
           </div>
         )}
 
-        {/* Layer 3: Division -- railway zone (IREPS), city (MSTC), state (Matex) */}
-        {sourceFilter && divisions.length > 0 && (
-          <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>
-              {sourceFilter === 'MSTC' ? 'City:' : sourceFilter === 'Matex' ? 'State:' : 'Division:'}
-            </span>
-            <button onClick={() => { setDivisionFilter(''); setSubDivisionFilter(''); }}
-              style={{
-                padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                border: `1px solid ${!divisionFilter ? C.green : C.bdr}`,
-                background: !divisionFilter ? `${C.green}1a` : '#fff', color: !divisionFilter ? C.green : C.txt,
-              }}>
-              All ({lots.length})
-            </button>
-            {divisions.map(([name, count]) => (
-              <button key={name} onClick={() => { setDivisionFilter(name); setSubDivisionFilter(''); }}
+        {/* Layer 3: Division -- railway zone (IREPS), city (MSTC), state
+            (Matex); multi-select. Only shown once at least one specific
+            Source is picked (mixing divisions across all three at once
+            isn't meaningful). */}
+        {sourceFilters.size > 0 && divisions.length > 0 && (() => {
+          const soleSource = sourceFilters.size === 1 ? [...sourceFilters][0] : null;
+          const label = soleSource === 'MSTC' ? 'City:' : soleSource === 'Matex' ? 'State:' : 'Division:';
+          return (
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>{label}</span>
+              <button onClick={() => { setDivisionFilters(new Set()); setSubDivisionFilters(new Set()); }}
                 style={{
                   padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                  border: `1px solid ${divisionFilter === name ? C.green : C.bdr}`,
-                  background: divisionFilter === name ? `${C.green}1a` : '#fff', color: divisionFilter === name ? C.green : C.txt,
+                  border: `1px solid ${!divisionFilters.size ? C.green : C.bdr}`,
+                  background: !divisionFilters.size ? `${C.green}1a` : '#fff', color: !divisionFilters.size ? C.green : C.txt,
                 }}>
-                {name} ({count})
+                All ({lots.length})
               </button>
-            ))}
-          </div>
-        )}
+              {divisions.map(([name, count]) => (
+                <button key={name} onClick={() => { toggleInSet(setDivisionFilters, name); setSubDivisionFilters(new Set()); }}
+                  style={{
+                    padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                    border: `1px solid ${divisionFilters.has(name) ? C.green : C.bdr}`,
+                    background: divisionFilters.has(name) ? `${C.green}1a` : '#fff', color: divisionFilters.has(name) ? C.green : C.txt,
+                  }}>
+                  {name} ({count})
+                </button>
+              ))}
+            </div>
+          );
+        })()}
 
-        {/* Layer 4: Sub-Division -- IREPS depots within the selected railway */}
-        {sourceFilter === 'IREPS' && divisionFilter && subDivisions.length > 0 && (
+        {/* Layer 4: Sub-Division -- IREPS depots within the selected
+            railway(s); multi-select. */}
+        {divisionFilters.size > 0 && subDivisions.length > 0 && (
           <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <span style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>Sub-Division:</span>
-            <button onClick={() => setSubDivisionFilter('')}
+            <button onClick={() => setSubDivisionFilters(new Set())}
               style={{
                 padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                border: `1px solid ${!subDivisionFilter ? C.red : C.bdr}`,
-                background: !subDivisionFilter ? `${C.red}1a` : '#fff', color: !subDivisionFilter ? C.red : C.txt,
+                border: `1px solid ${!subDivisionFilters.size ? C.red : C.bdr}`,
+                background: !subDivisionFilters.size ? `${C.red}1a` : '#fff', color: !subDivisionFilters.size ? C.red : C.txt,
               }}>
               All ({withinDivision.length})
             </button>
             {subDivisions.map(([name, count]) => (
-              <button key={name} onClick={() => setSubDivisionFilter(name)}
+              <button key={name} onClick={() => toggleInSet(setSubDivisionFilters, name)}
                 style={{
                   padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                  border: `1px solid ${subDivisionFilter === name ? C.red : C.bdr}`,
-                  background: subDivisionFilter === name ? `${C.red}1a` : '#fff', color: subDivisionFilter === name ? C.red : C.txt,
+                  border: `1px solid ${subDivisionFilters.has(name) ? C.red : C.bdr}`,
+                  background: subDivisionFilters.has(name) ? `${C.red}1a` : '#fff', color: subDivisionFilters.has(name) ? C.red : C.txt,
                 }}>
                 {name} ({count})
               </button>
@@ -1905,22 +1973,24 @@ export default function App() {
           <ColumnPicker visible={visibleCols} onChange={setVisibleCols} columns={sourceColumns} />
         </div>
 
+        {loading && <div className="progress-bar"><div className="progress-bar-fill" /></div>}
+
         <div style={{ background: C.surf, borderRadius: 8, border: `1px solid ${C.bdr}`, overflow: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5, tableLayout: 'fixed' }}>
             <thead>
               <tr style={{ background: '#fafafa', textAlign: 'left' }}>
-                <th style={th}></th><th style={th}>★</th>
-                {sourceColumns.some(c => c.id === 'source') && visibleCols.source && <th style={th}>Source</th>}
-                {sourceColumns.some(c => c.id === 'railway') && visibleCols.railway && <th style={th}>Railway</th>}
-                {sourceColumns.some(c => c.id === 'depot') && visibleCols.depot && <th style={th}>{sourceFilter === 'MSTC' ? 'Office' : 'Depot'}</th>}
-                {visibleCols.location && <th style={th}>Location</th>}
-                <th style={th}>Lot No</th>
-                {visibleCols.qty_unit && <th style={th}>Qty/Unit</th>}
-                {visibleCols.category && <th style={th}>Category</th>}
+                <th style={{ ...th, width: '3%' }}></th><th style={{ ...th, width: '3%' }}>★</th>
+                {sourceColumns.some(c => c.id === 'source') && visibleCols.source && <th style={{ ...th, width: '4%' }}>Source</th>}
+                {sourceColumns.some(c => c.id === 'railway') && visibleCols.railway && <th style={{ ...th, width: '7%' }}>Railway</th>}
+                {sourceColumns.some(c => c.id === 'depot') && visibleCols.depot && <th style={{ ...th, width: '7%' }}>{sourceFilters.size === 1 && [...sourceFilters][0] === 'MSTC' ? 'Office' : 'Depot'}</th>}
+                {visibleCols.location && <th style={{ ...th, width: '9%' }}>Location</th>}
+                <th style={{ ...th, width: '8%' }}>Lot No</th>
+                {visibleCols.qty_unit && <th style={{ ...th, width: '5%' }}>Qty/Unit</th>}
+                {visibleCols.category && <th style={{ ...th, width: '7%' }}>Category</th>}
                 {visibleCols.material_descr && <th style={th}>Material Descr.</th>}
-                {visibleCols.next_auction && <th style={th}>Next Auction</th>}
-                {visibleCols.tag && <th style={th}>Tag</th>}
-                <th style={th}>Actions</th>
+                {visibleCols.next_auction && <th style={{ ...th, width: '8%' }}>Next Auction</th>}
+                {visibleCols.tag && <th style={{ ...th, width: '4%' }}>Tag</th>}
+                <th style={{ ...th, width: '8%' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1934,11 +2004,11 @@ export default function App() {
                   {sourceColumns.some(c => c.id === 'railway') && visibleCols.railway && <td style={td}>{row.railway}</td>}
                   {sourceColumns.some(c => c.id === 'depot') && visibleCols.depot && <td style={td}>{row.depot}</td>}
                   {visibleCols.location && <td style={td} title={row.change_tag === 'updated' ? changeTooltip(row) : undefined}>{row.location}</td>}
-                  <td style={td}>{row.lot_no}</td>
+                  <td style={td} title={row.lot_no}>{row.lot_no}</td>
                   {visibleCols.qty_unit && <td style={td}>{row.qty_unit}</td>}
-                  {visibleCols.category && <td style={td}>{row.category}</td>}
-                  {visibleCols.material_descr && <td style={{ ...clipTd, maxWidth: 320 }} title={row.material_descr}>{row.material_descr}</td>}
-                  {visibleCols.next_auction && <td style={td}>{row.next_auction}</td>}
+                  {visibleCols.category && <td style={td} title={row.category}>{row.category}</td>}
+                  {visibleCols.material_descr && <td style={td} title={row.material_descr}>{row.material_descr}</td>}
+                  {visibleCols.next_auction && <NextAuctionCell row={row} />}
                   {visibleCols.tag && (
                     <td style={td}>
                       {row.change_tag && (
@@ -1948,7 +2018,7 @@ export default function App() {
                       )}
                     </td>
                   )}
-                  <td style={td}>
+                  <td style={{ ...td, whiteSpace: 'normal' }}>
                     <button onClick={() => setDetailLot(row)} style={smallBtn}>Details</button>{' '}
                     <button onClick={() => downloadCataloguePdf(row)} style={smallBtn}>PDF</button>
                   </td>
@@ -2239,7 +2309,7 @@ function WatchlistRow({ row, selected, onToggleSelect, onRemove, onDetails, onEd
       <td style={td}>{row.qty_unit}</td>
       <td style={td}>{row.category}</td>
       <td style={{ ...clipTd, maxWidth: 240 }} title={row.material_descr}>{row.material_descr}</td>
-      <td style={td}>{row.next_auction}</td>
+      <NextAuctionCell row={row} />
       <td style={td}><Badge text={row.watch_status || 'watching'} color={WATCH_STATUS_COLOR[row.watch_status] || C.sub} /></td>
       <td style={td}>{row.team || '-'}</td>
       <td style={td}>{row.target_rate || '-'}</td>
@@ -2256,23 +2326,84 @@ function WatchlistRow({ row, selected, onToggleSelect, onRemove, onDetails, onEd
   );
 }
 
-const th = { padding: '8px 10px', fontSize: 11, fontWeight: 600, color: C.sub, whiteSpace: 'nowrap' };
-const td = { padding: '7px 10px', verticalAlign: 'top' };
-// Single-line truncation with the full text available on hover (native title
-// tooltip) -- used for description/title columns that would otherwise wrap
-// and blow up row heights.
-const clipTd = { ...td, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+// Base cell styles default to single-line ellipsis truncation (full text
+// still available via the native title tooltip): harmless on a table left
+// at its default table-layout (columns just size to content as before,
+// so nothing visually changes there), and what stops a wide column's text
+// from forcing the table wider than its container -- and the page into a
+// horizontal scrollbar -- on every table below that opts into
+// tableLayout:'fixed' with explicit per-column widths.
+const th = { padding: '8px 10px', fontSize: 11, fontWeight: 600, color: C.sub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+const td = { padding: '7px 10px', verticalAlign: 'top', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' };
+// Kept as an alias (same styling as td now) so existing call sites that
+// pass a maxWidth override alongside it keep working unchanged.
+const clipTd = td;
+
+// How urgently an auction's own date deserves attention: today/tomorrow in
+// red, within the week in amber, otherwise green: this is what makes the
+// date "evident" at a glance rather than just more plain text in a row of
+// plain text.
+function dayBadgeColor(days) {
+  if (days === null || days === undefined || days < 0) return C.sub;
+  if (days <= 1) return C.red;
+  if (days <= 7) return C.amber;
+  return C.green;
+}
+
+// How many times this exact lot has been relisted (its own next_auction
+// date moved to a new value because it didn't sell last time), per
+// lots.relist_count -- a persistent counter maintained server-side by
+// autoscan.py/matex_autoscan.py/mstc_import.py, since change_detail itself
+// only ever holds the single most recent diff.
+function relistTooltip(row) {
+  if (!row.relist_count) return undefined;
+  const times = `${row.relist_count} time${row.relist_count > 1 ? 's' : ''}`;
+  const prevDate = row.change_detail?.['Next Auction']?.from;
+  return prevDate
+    ? `Relisted ${times} so far -- didn't sell at its previous auction (${prevDate})`
+    : `Relisted ${times} so far -- didn't sell at a previous auction`;
+}
+
+// The Next Auction cell shared by every table that lists lots: the date
+// itself bolded (so it doesn't get lost among plainer columns), a
+// color-coded "days to go" badge right under it, and -- when this lot has
+// ever been relisted -- a "↻ Nx" badge with the relist history on hover.
+function NextAuctionCell({ row }) {
+  const days = daysToAuction(row.next_auction);
+  return (
+    <td style={{ ...td, whiteSpace: 'normal' }}>
+      <div style={{ fontWeight: 700 }}>{row.next_auction || '-'}</div>
+      <div style={{ display: 'flex', gap: 5, alignItems: 'center', marginTop: 2, flexWrap: 'wrap' }}>
+        {days !== null && (
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: dayBadgeColor(days) }}>{formatDaysTo(days)}</span>
+        )}
+        {row.relist_count > 0 && (
+          <span title={relistTooltip(row)} style={{
+            fontSize: 10, fontWeight: 700, color: C.amber, background: `${C.amber}1a`,
+            borderRadius: 999, padding: '1px 5px', cursor: 'help',
+          }}>
+            ↻ {row.relist_count}×
+          </span>
+        )}
+      </div>
+    </td>
+  );
+}
 
 // Shared header/row for the handful of places that show a lot in the same
 // full column set as the Lots table itself (Dashboard's keyword-match
 // lists, Keyword Watch's own matches) -- keeps those in parity with Lots
-// without re-typing the same 10 columns in each spot.
+// without re-typing the same columns in each spot. Fixed-width + ellipsis
+// everywhere so none of these ever need a horizontal scrollbar either.
 function FullLotColumnsHeader() {
   return (
     <tr style={{ background: '#fafafa', textAlign: 'left' }}>
-      <th style={th}>Source</th><th style={th}>Railway</th><th style={th}>Depot</th><th style={th}>Location</th>
-      <th style={th}>Lot No</th><th style={th}>Qty/Unit</th><th style={th}>Category</th>
-      <th style={th}>Material Descr.</th><th style={th}>Next Auction</th><th style={th}>Days To</th><th style={th}>Actions</th>
+      <th style={{ ...th, width: '6%' }}>Source</th><th style={{ ...th, width: '9%' }}>Railway</th>
+      <th style={{ ...th, width: '9%' }}>Depot</th><th style={{ ...th, width: '11%' }}>Location</th>
+      <th style={{ ...th, width: '9%' }}>Lot No</th><th style={{ ...th, width: '5%' }}>Qty/Unit</th>
+      <th style={{ ...th, width: '7%' }}>Category</th>
+      <th style={th}>Material Descr.</th><th style={{ ...th, width: '9%' }}>Next Auction</th>
+      <th style={{ ...th, width: '8%' }}>Actions</th>
     </tr>
   );
 }
@@ -2283,14 +2414,13 @@ function FullLotRow({ row, onDetails }) {
       <td style={td}>{row.source || 'IREPS'}</td>
       <td style={td}>{row.railway}</td>
       <td style={td}>{row.depot}</td>
-      <td style={td}>{row.location}</td>
-      <td style={td}>{row.lot_no}</td>
+      <td style={td} title={row.location}>{row.location}</td>
+      <td style={td} title={row.lot_no}>{row.lot_no}</td>
       <td style={td}>{row.qty_unit}</td>
-      <td style={td}>{row.category}</td>
-      <td style={{ ...clipTd, maxWidth: 320 }} title={row.material_descr}>{row.material_descr}</td>
-      <td style={td}>{row.next_auction}</td>
-      <td style={td}>{formatDaysTo(daysToAuction(row.next_auction))}</td>
-      <td style={td}><button onClick={onDetails} style={smallBtn}>Details</button></td>
+      <td style={td} title={row.category}>{row.category}</td>
+      <td style={td} title={row.material_descr}>{row.material_descr}</td>
+      <NextAuctionCell row={row} />
+      <td style={{ ...td, whiteSpace: 'normal' }}><button onClick={onDetails} style={smallBtn}>Details</button></td>
     </tr>
   );
 }
@@ -2316,6 +2446,14 @@ function columnsForSource(source) {
   if (source === 'Matex') return LOT_COLUMNS.filter(c => c.id !== 'railway' && c.id !== 'depot');
   if (source === 'MSTC') return LOT_COLUMNS.filter(c => c.id !== 'railway');
   return LOT_COLUMNS; // IREPS or All (mixed) -- show everything
+}
+
+// Multi-select version: with exactly one source chosen, defer to the
+// single-source rules above; with none (All) or more than one selected at
+// once, show every column (same as "All" always did).
+function columnsForSources(sources) {
+  if (sources.size === 1) return columnsForSource([...sources][0]);
+  return LOT_COLUMNS;
 }
 
 // Layer 3 of the Lots tab's Source > Keyword > Division (> Sub-Division)

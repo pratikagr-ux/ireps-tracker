@@ -70,7 +70,7 @@ TRACKED_FIELD_LABELS = {"material_descr": "Material Descr.", "next_auction": "Ne
 def fetch_existing_matex_lots(base_url: str, headers: dict) -> dict[str, dict]:
     """lot_no -> {content_hash, status, first_seen_at, <tracked fields>} for
     every existing source='Matex' row, to diff a fresh scrape against."""
-    select_fields = "lot_no,content_hash,status,first_seen_at," + ",".join(matex_core.TRACKED_FIELDS)
+    select_fields = "lot_no,content_hash,status,first_seen_at,relist_count," + ",".join(matex_core.TRACKED_FIELDS)
     out: dict[str, dict] = {}
     offset = 0
     while True:
@@ -102,10 +102,12 @@ def process_event(event: dict, existing: dict[str, dict], now_iso: str) -> dict:
     content_hash = matex_core.content_hash(event)
     prev = existing.get(event["lot_no"])
     change_detail = None
+    relist_count = 0
     if prev is None:
         change_tag = "new"
         first_seen_at = now_iso
     else:
+        relist_count = prev.get("relist_count") or 0
         if prev["status"] == "expired":
             change_tag = "updated"  # reappeared after being gone
         elif prev["content_hash"] != content_hash:
@@ -118,6 +120,8 @@ def process_event(event: dict, existing: dict[str, dict], now_iso: str) -> dict:
                 old, new = prev.get(field, ""), event.get(field, "")
                 if old != new:
                     change_detail[label] = {"from": old, "to": new}
+            if change_detail.get("Next Auction", {}).get("from"):
+                relist_count += 1
         first_seen_at = prev.get("first_seen_at") or now_iso
     return {
         "lot_no": event["lot_no"],
@@ -134,6 +138,7 @@ def process_event(event: dict, existing: dict[str, dict], now_iso: str) -> dict:
         "status": "active",
         "change_tag": change_tag,
         "change_detail": change_detail,
+        "relist_count": relist_count,
         "content_hash": content_hash,
         "detail": {"Location": event["location"]} if event["location"] else None,
         "first_seen_at": first_seen_at,

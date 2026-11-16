@@ -31,23 +31,39 @@ export function onAuthChange(cb) {
   return () => data.subscription.unsubscribe();
 }
 
+// IREPS itself surfaces a couple of non-real "railway" values on its own
+// site -- "IREPS" and "IREPS-TESTING" -- for its own sandbox/test unit, not
+// an actual zone. No genuine lot ever carries either value (and MSTC/Matex
+// never populate `railway` at all), so excluding them is safe everywhere
+// lots are read, not just on the Lots tab.
+const FAKE_RAILWAYS = '(IREPS-TESTING,IREPS)';
+function excludeTestRailways(q) {
+  return q.not('railway', 'in', FAKE_RAILWAYS);
+}
+
 // ── Lots ─────────────────────────────────────────────────────────────────
 // Server-side filtering/search via PostgREST, mirroring webapp.py's /lots
 // route (search across lot_no/material_descr/railway/depot, category,
 // change_tag, status filters).
-export async function fetchLots({ search = '', category = '', changeTag = '', status = 'active', source = '', anyKeywords = [], limit = 500 } = {}) {
+export async function fetchLots({ search = '', category = '', changeTag = '', status = 'active', sources = [], anyKeywords = [], limit = 500 } = {}) {
   let q = supabase.from('lots').select('*').order('publish_date', { ascending: false }).limit(limit);
+  q = excludeTestRailways(q);
   if (status) q = q.eq('status', status);
   if (category) q = q.eq('category', category);
   if (changeTag) q = q.eq('change_tag', changeTag);
-  if (source) q = q.eq('source', source);
+  if (sources.length) q = q.in('source', sources);
   const esc = (s) => s.replace(/[%,]/g, '');
+  // The keyword-tab selection and the free-text search box are independent
+  // and combine with AND (e.g. search "sambalpur" + keyword tab "60kg" ->
+  // rows that mention Sambalpur AND match the 60kg keyword) -- each is its
+  // own .or() call, and calling .or() more than once ANDs the groups
+  // together (PostgREST semantics), which is exactly what we want here.
   if (anyKeywords.length) {
-    // "All Keywords": OR across every saved keyword (matches any one of
-    // them) -- a single .or() call, unlike the AND-across-terms behaviour
-    // below for the free-text search box.
+    // Keyword tabs: OR across every selected keyword (matches any one of
+    // them), as one .or() call.
     q = q.or(anyKeywords.map(k => `material_descr.ilike.%${esc(k)}%,category.ilike.%${esc(k)}%`).join(','));
-  } else if (search.trim()) {
+  }
+  if (search.trim()) {
     const terms = search.split(',').map(t => t.trim()).filter(Boolean);
     for (const term of terms) {
       q = q.or(`lot_no.ilike.%${esc(term)}%,material_descr.ilike.%${esc(term)}%,railway.ilike.%${esc(term)}%,depot.ilike.%${esc(term)}%`);
@@ -58,7 +74,7 @@ export async function fetchLots({ search = '', category = '', changeTag = '', st
   return data || [];
 }
 
-export async function fetchCategoryCounts(source = '') {
+export async function fetchCategoryCounts(sources = []) {
   // The project's PostgREST max-rows setting caps any single response
   // (1000 by default), which silently under-counted categories once total
   // active lots passed that -- a client-side .limit() can't override a
@@ -67,7 +83,8 @@ export async function fetchCategoryCounts(source = '') {
   const pageSize = 1000;
   for (let from = 0; ; from += pageSize) {
     let q = supabase.from('lots').select('category').eq('status', 'active').range(from, from + pageSize - 1);
-    if (source) q = q.eq('source', source);
+    q = excludeTestRailways(q);
+    if (sources.length) q = q.in('source', sources);
     const { data, error } = await q;
     if (error) throw error;
     for (const row of data || []) counts[row.category] = (counts[row.category] || 0) + 1;
@@ -85,9 +102,9 @@ export async function fetchActiveLotsSummary() {
   const out = [];
   const pageSize = 1000;
   for (let from = 0; ; from += pageSize) {
-    const { data, error } = await supabase
+    const { data, error } = await excludeTestRailways(supabase
       .from('lots').select('material_descr,category,source')
-      .eq('status', 'active').range(from, from + pageSize - 1);
+      .eq('status', 'active').range(from, from + pageSize - 1));
     if (error) throw error;
     out.push(...(data || []));
     if (!data || data.length < pageSize) break;
@@ -174,6 +191,7 @@ export async function removeKeyword(id) {
 export async function fetchKeywordMatches(keywords) {
   if (!keywords.length) return [];
   let q = supabase.from('lots').select('*').eq('status', 'active').order('next_auction', { ascending: true }).limit(500);
+  q = excludeTestRailways(q);
   const esc = (k) => k.replace(/[%,]/g, '');
   const orExpr = keywords.map(k => `material_descr.ilike.%${esc(k)}%,category.ilike.%${esc(k)}%`).join(',');
   q = q.or(orExpr);
@@ -189,6 +207,7 @@ export async function fetchKeywordMatches(keywords) {
 export async function fetchKeywordSourceCount(keyword, source) {
   const esc = keyword.replace(/[%,]/g, '');
   let q = supabase.from('lots').select('*', { count: 'exact', head: true }).eq('status', 'active');
+  q = excludeTestRailways(q);
   if (source) q = q.eq('source', source);
   q = q.or(`material_descr.ilike.%${esc}%,category.ilike.%${esc}%`);
   const { count, error } = await q;

@@ -98,7 +98,7 @@ def fetch_existing_lots(base_url: str, headers: dict) -> dict[str, dict]:
     this, a lot_no this scan never sees (every Matex/MSTC row, by
     definition, plus any IREPS railway a partial/scoped run skips) would
     look "not seen" and get wrongly marked expired."""
-    select_fields = "lot_no,content_hash,status,first_seen_at," + ",".join(ireps_core.TRACKED_FIELDS)
+    select_fields = "lot_no,content_hash,status,first_seen_at,relist_count," + ",".join(ireps_core.TRACKED_FIELDS)
     out: dict[str, dict] = {}
     offset = 0
     while True:
@@ -132,10 +132,12 @@ def process_row(row: dict, existing: dict[str, dict], now_iso: str) -> dict:
     content_hash = ireps_core.content_hash(row)
     prev = existing.get(row["lot_no"])
     change_detail = None
+    relist_count = 0
     if prev is None:
         change_tag = "new"
         first_seen_at = now_iso
     else:
+        relist_count = prev.get("relist_count") or 0
         if prev["status"] == "expired":
             change_tag = "updated"  # reappeared after being gone
         elif prev["content_hash"] != content_hash:
@@ -148,6 +150,10 @@ def process_row(row: dict, existing: dict[str, dict], now_iso: str) -> dict:
                 old, new = prev.get(field, ""), row.get(field, "")
                 if old != new:
                     change_detail[label] = {"from": old, "to": new}
+            # The lot's own auction date moved to a new, non-blank value --
+            # it didn't sell at the previous one and got put up again.
+            if change_detail.get("Next Auction", {}).get("from"):
+                relist_count += 1
         first_seen_at = prev.get("first_seen_at") or now_iso
     return {
         "lot_no": row["lot_no"],
@@ -164,6 +170,7 @@ def process_row(row: dict, existing: dict[str, dict], now_iso: str) -> dict:
         "status": "active",
         "change_tag": change_tag,
         "change_detail": change_detail,
+        "relist_count": relist_count,
         "content_hash": content_hash,
         "first_seen_at": first_seen_at,
         "last_seen_at": now_iso,

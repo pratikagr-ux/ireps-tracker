@@ -203,7 +203,7 @@ def fetch_existing_mstc_lots(base_url: str, headers: dict) -> dict[str, dict]:
             f"{base_url}/rest/v1/lots",
             headers=headers,
             params={
-                "select": "lot_no,content_hash,status,first_seen_at," + ",".join(_HASH_FIELDS),
+                "select": "lot_no,content_hash,status,first_seen_at,relist_count," + ",".join(_HASH_FIELDS),
                 "source": "eq.MSTC",
                 "limit": str(page_size),
                 "offset": str(offset),
@@ -317,10 +317,12 @@ def main():
             row["content_hash"] = content_hash(row)
             prev = existing.get(row["lot_no"])
             change_detail = None
+            relist_count = 0
             if prev is None:
                 change_tag = "new"
                 first_seen_at = now_iso
             else:
+                relist_count = prev.get("relist_count") or 0
                 first_seen_at = prev.get("first_seen_at") or now_iso
                 change_tag = "updated" if (prev["status"] == "expired" or prev["content_hash"] != row["content_hash"]) else "unchanged"
                 if change_tag == "updated":
@@ -329,13 +331,15 @@ def main():
                         old, new = prev.get(field, ""), row.get(field, "")
                         if old != new:
                             change_detail[label] = {"from": old, "to": new}
+                    if change_detail.get("Next Auction", {}).get("from"):
+                        relist_count += 1
 
             dt = parse_dt(row["next_auction"])
             status = "expired" if dt and dt < now else "active"
             if status == "expired":
                 change_tag = "expired" if change_tag != "new" else "new"
 
-            row.update(status=status, change_tag=change_tag, change_detail=change_detail, first_seen_at=first_seen_at, last_seen_at=now_iso)
+            row.update(status=status, change_tag=change_tag, change_detail=change_detail, relist_count=relist_count, first_seen_at=first_seen_at, last_seen_at=now_iso)
             tally[change_tag] = tally.get(change_tag, 0) + 1
             payload.append(row)
 
