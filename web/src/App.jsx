@@ -18,11 +18,18 @@ const IREPS_LOT_URL = (lotId) => `https://ireps.gov.in/eps/auction/viewLotAnon.d
 const MATEX_URL = 'https://www.matexnet.com/Index.aspx';
 const MSTC_URL = 'https://www.mstcecommerce.com/auctionhome/aucsearch/search.jsp';
 
-// Matex and MSTC have no public per-lot URL (per-lot detail sits behind a
-// login we don't have for either), so their "View on..." link just goes to
-// the public listing/search page instead.
+// MSTC has no public per-lot URL (per-lot detail sits behind a login we
+// don't have), so its "View on..." link just goes to the search page
+// instead. Matex rows scraped via the logged-in path (see
+// matex_autoscan.py) carry a real per-auction URL in detail['Detail URL']
+// -- only reachable if the *viewer* is themselves logged in to Matex (no
+// anonymous equivalent exists there), so rows without one (public-only
+// scrape, or an older row from before this existed) fall back to the
+// generic homepage same as before.
 function sourceLink(row) {
-  if (row.source === 'Matex') return { url: MATEX_URL, label: 'View on Matex' };
+  if (row.source === 'Matex') {
+    return { url: row.detail?.['Detail URL'] || MATEX_URL, label: 'View on Matex' };
+  }
   if (row.source === 'MSTC') return { url: MSTC_URL, label: 'View on MSTC' };
   return { url: IREPS_LOT_URL(row.lot_id), label: 'View on IREPS' };
 }

@@ -191,6 +191,14 @@ def build_events_from_authenticated(auctions: list[dict]) -> list[dict]:
     events = []
     for auction in auctions:
         items = auction.get("items") or []
+        detail_base = {"Location": auction["location"]} if auction["location"] else {}
+        if auction.get("detail_url"):
+            # Lets the app's "View on Matex" link open this exact auction
+            # instead of the generic homepage -- only works for a viewer
+            # who's themselves logged in to Matex (no public/anonymous
+            # equivalent exists there), but that's strictly better than
+            # always landing on the homepage.
+            detail_base["Detail URL"] = auction["detail_url"]
         if not items:
             events.append({
                 "lot_no": auction["lot_no"],
@@ -198,7 +206,7 @@ def build_events_from_authenticated(auctions: list[dict]) -> list[dict]:
                 "qty_unit": "",
                 "material_descr": auction["material_descr"],
                 "next_auction": auction["next_auction"],
-                "detail": {"Location": auction["location"]} if auction["location"] else None,
+                "detail": detail_base or None,
             })
             continue
         for item in items:
@@ -209,7 +217,7 @@ def build_events_from_authenticated(auctions: list[dict]) -> list[dict]:
                 "material_descr": item["material_descr"] or auction["material_descr"],
                 "next_auction": auction["next_auction"],
                 "detail": {
-                    "Location": auction["location"],
+                    **detail_base,
                     "Material Code": item["material_code"],
                     "Plant": item["plant"],
                     "EMD Amount (Rs.)": item["emd_amount"],
