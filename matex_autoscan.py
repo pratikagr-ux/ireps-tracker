@@ -191,7 +191,16 @@ def build_events_from_authenticated(auctions: list[dict]) -> list[dict]:
     events = []
     for auction in auctions:
         items = auction.get("items") or []
+        company_name = auction.get("company_name") or ""
         detail_base = {"Location": auction["location"]} if auction["location"] else {}
+        if company_name:
+            # The company name was previously parsed off the listing and
+            # then discarded entirely -- not stored, not searchable, not
+            # shown anywhere. Carried through here, and folded into
+            # material_descr below, so a lot's auction is visible/
+            # searchable right in the main table instead of only on
+            # Matex's own ProdDetails page.
+            detail_base["Company"] = company_name
         if auction.get("detail_url"):
             # Lets the app's "View on Matex" link open this exact auction
             # instead of the generic homepage -- only works for a viewer
@@ -199,22 +208,24 @@ def build_events_from_authenticated(auctions: list[dict]) -> list[dict]:
             # equivalent exists there), but that's strictly better than
             # always landing on the homepage.
             detail_base["Detail URL"] = auction["detail_url"]
+        auction_descr = f"{company_name} — {auction['material_descr']}" if company_name else auction["material_descr"]
         if not items:
             events.append({
                 "lot_no": auction["lot_no"],
                 "lot_id": auction["lot_no"],
                 "qty_unit": "",
-                "material_descr": auction["material_descr"],
+                "material_descr": auction_descr,
                 "next_auction": auction["next_auction"],
                 "detail": detail_base or None,
             })
             continue
         for item in items:
+            item_descr = item["material_descr"] or auction["material_descr"]
             events.append({
                 "lot_no": f"{auction['lot_no']}#{item['item_lot_no']}",
                 "lot_id": auction["lot_no"],
                 "qty_unit": item["qty_unit"],
-                "material_descr": item["material_descr"] or auction["material_descr"],
+                "material_descr": f"{company_name} — {item_descr}" if company_name else item_descr,
                 "next_auction": auction["next_auction"],
                 "detail": {
                     **detail_base,

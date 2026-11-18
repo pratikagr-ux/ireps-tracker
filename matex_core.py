@@ -238,11 +238,13 @@ def parse_authenticated_listing(html: str) -> list[dict]:
             continue
         lot_no = m.group(1)
         rest = company_text[:m.start()].strip()
-        _company_name, _, location = rest.rpartition(" - ")
-        location = location.strip() if _company_name else ""
+        company_name, _, location = rest.rpartition(" - ")
+        if not company_name:
+            company_name, location = rest, ""
         rows.append({
             "lot_no": lot_no,
-            "location": location,
+            "company_name": company_name.strip(),
+            "location": location.strip(),
             "material_descr": description,
             "next_auction": format_auction_datetime(date_text),
             "detail_url": urljoin(LISTING_URL, link["href"]),
