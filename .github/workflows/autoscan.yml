@@ -33,3 +33,9 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Optional: signs in for the richer per-lot breakdown (material
+          # code, quantity, EMD amount) instead of one coarse row per
+          # auction. Falls back to the public-only scan if unset or if
+          # login fails.
+          MATEX_USER_ID: ${{ secrets.MATEX_USER_ID }}
+          MATEX_PASSWORD: ${{ secrets.MATEX_PASSWORD }}

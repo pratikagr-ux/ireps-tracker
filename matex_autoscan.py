@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
-"""Scan the public Matex (matexnet.com) upcoming-auctions list into
-Supabase's `lots` table (source='Matex'), alongside the IREPS rows that
-autoscan.py maintains for source='IREPS'. Same new/updated/unchanged/
-expired change_tag pattern as autoscan.py, but scoped to source='Matex'
-rows only, so it never touches IREPS data.
+"""Scan Matex (matexnet.com) upcoming auctions into Supabase's `lots`
+table (source='Matex'), alongside the IREPS rows that autoscan.py
+maintains for source='IREPS'. Same new/updated/unchanged/expired
+change_tag pattern as autoscan.py, but scoped to source='Matex' rows
+only, so it never touches IREPS data.
 
-Matex's own "Auctions" page (richer per-lot detail, qty, category) sits
-behind a login we don't have -- its link bounces back to the public
-homepage when signed out -- so this only has what's public: a lot code,
-a location (state), a free-text description and an auction date/time
-window. qty_unit, category and min_incr are left blank for Matex rows;
-`detail` is set directly from the scraped location (no second per-lot
-fetch needed, unlike IREPS).
+Two modes, chosen automatically by whether MATEX_USER_ID/MATEX_PASSWORD
+are set:
+
+- Logged in (preferred): signs in via matex_core.scan_authenticated(),
+  then imports one `lots` row per *individual lot* within each auction
+  (lot_no = "<auction code>#<lot no>"), same granularity as
+  mstc_import.py -- real material code, description, quantity and EMD
+  amount per lot, not just one coarse row per auction. If login fails, or
+  one auction's per-lot page can't be fetched/parsed, that auction falls
+  back to a single coarse row (same shape as the public-only scan), so a
+  site hiccup degrades gracefully instead of losing the auction entirely.
+- Public only (fallback / no credentials): the public homepage's "All
+  Events" table -- a lot code, a location (state), a free-text
+  description and an auction date/time window; no qty/unit or per-lot
+  detail.
 
 Credentials: same SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY as
-autoscan.py (env vars in CI, or a local .env.local file).
+autoscan.py, plus optional MATEX_USER_ID / MATEX_PASSWORD for the
+logged-in mode (env vars in CI, or a local .env.local file).
 
 Usage: .venv/bin/python matex_autoscan.py
 """
@@ -33,19 +42,21 @@ from pg_filter import pg_in_filter
 
 ENV_FILE = Path(__file__).parent / ".env.local"
 REQUIRED_KEYS = ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY")
+OPTIONAL_KEYS = ("MATEX_USER_ID", "MATEX_PASSWORD")
 EXISTING_PAGE_SIZE = 1000
 
 
 def load_env() -> dict[str, str]:
-    env = {k: os.environ[k] for k in REQUIRED_KEYS if os.environ.get(k)}
-    if len(env) < len(REQUIRED_KEYS) and ENV_FILE.exists():
+    all_keys = REQUIRED_KEYS + OPTIONAL_KEYS
+    env = {k: os.environ[k] for k in all_keys if os.environ.get(k)}
+    if len(env) < len(all_keys) and ENV_FILE.exists():
         for line in ENV_FILE.read_text().splitlines():
             line = line.strip()
             if not line or line.startswith("#") or "=" not in line:
                 continue
             key, _, value = line.partition("=")
             key = key.strip()
-            if key in REQUIRED_KEYS and key not in env:
+            if key in all_keys and key not in env:
                 env[key] = value.strip()
     missing = [k for k in REQUIRED_KEYS if not env.get(k)]
     if missing:
@@ -64,7 +75,11 @@ def rest_headers(service_key: str) -> dict[str, str]:
 
 #: field -> human label, for the diff shown when a lot's change_tag is
 #: "updated" (lots.change_detail). Mirrors matex_core.TRACKED_FIELDS.
-TRACKED_FIELD_LABELS = {"material_descr": "Material Descr.", "next_auction": "Next Auction"}
+TRACKED_FIELD_LABELS = {
+    "material_descr": "Material Descr.",
+    "qty_unit": "Quantity",
+    "next_auction": "Next Auction",
+}
 
 
 def fetch_existing_matex_lots(base_url: str, headers: dict) -> dict[str, dict]:
@@ -99,6 +114,11 @@ def fetch_existing_matex_lots(base_url: str, headers: dict) -> dict[str, dict]:
 
 
 def process_event(event: dict, existing: dict[str, dict], now_iso: str) -> dict:
+    """`event` is already a fully-shaped row (lot_no, lot_id, qty_unit,
+    material_descr, next_auction, detail) -- built either per-lot from the
+    authenticated path or per-auction from the public-only fallback; this
+    just layers the new/updated/unchanged/expired diff bookkeeping on
+    top, same as autoscan.py/mstc_import.py."""
     content_hash = matex_core.content_hash(event)
     prev = existing.get(event["lot_no"])
     change_detail = None
@@ -125,11 +145,11 @@ def process_event(event: dict, existing: dict[str, dict], now_iso: str) -> dict:
         first_seen_at = prev.get("first_seen_at") or now_iso
     return {
         "lot_no": event["lot_no"],
-        "lot_id": event["lot_no"],
+        "lot_id": event.get("lot_id", event["lot_no"]),
         "source": "Matex",
         "railway": "",
         "depot": "",
-        "qty_unit": "",
+        "qty_unit": event.get("qty_unit", ""),
         "category": "Matex Auction",
         "min_incr": "",
         "material_descr": event["material_descr"],
@@ -140,10 +160,62 @@ def process_event(event: dict, existing: dict[str, dict], now_iso: str) -> dict:
         "change_detail": change_detail,
         "relist_count": relist_count,
         "content_hash": content_hash,
-        "detail": {"Location": event["location"]} if event["location"] else None,
+        "detail": event.get("detail"),
         "first_seen_at": first_seen_at,
         "last_seen_at": now_iso,
     }
+
+
+def build_events_from_public(public_events: list[dict]) -> list[dict]:
+    """Shape matex_core.scan()'s per-auction rows to process_event's
+    uniform event dict -- one row per auction, no per-lot detail."""
+    return [
+        {
+            "lot_no": e["lot_no"],
+            "lot_id": e["lot_no"],
+            "qty_unit": "",
+            "material_descr": e["material_descr"],
+            "next_auction": e["next_auction"],
+            "detail": {"Location": e["location"]} if e["location"] else None,
+        }
+        for e in public_events
+    ]
+
+
+def build_events_from_authenticated(auctions: list[dict]) -> list[dict]:
+    """Shape matex_core.scan_authenticated()'s auctions (each possibly
+    carrying a per-lot `items` breakdown) to process_event's uniform event
+    dict -- one row per individual lot where available, falling back to a
+    single coarse row (matching the public-only shape) for any auction
+    whose ProdDetails page couldn't be fetched/parsed."""
+    events = []
+    for auction in auctions:
+        items = auction.get("items") or []
+        if not items:
+            events.append({
+                "lot_no": auction["lot_no"],
+                "lot_id": auction["lot_no"],
+                "qty_unit": "",
+                "material_descr": auction["material_descr"],
+                "next_auction": auction["next_auction"],
+                "detail": {"Location": auction["location"]} if auction["location"] else None,
+            })
+            continue
+        for item in items:
+            events.append({
+                "lot_no": f"{auction['lot_no']}#{item['item_lot_no']}",
+                "lot_id": auction["lot_no"],
+                "qty_unit": item["qty_unit"],
+                "material_descr": item["material_descr"] or auction["material_descr"],
+                "next_auction": auction["next_auction"],
+                "detail": {
+                    "Location": auction["location"],
+                    "Material Code": item["material_code"],
+                    "Plant": item["plant"],
+                    "EMD Amount (Rs.)": item["emd_amount"],
+                },
+            })
+    return events
 
 
 def push_lots(base_url: str, headers: dict, rows: list[dict]) -> None:
@@ -201,9 +273,28 @@ def main():
     headers = rest_headers(env["SUPABASE_SERVICE_ROLE_KEY"])
 
     started_at = datetime.now(timezone.utc).isoformat()
-    print("Scanning Matex and syncing to Supabase...", file=sys.stderr)
-    events = matex_core.scan()
-    print(f"  found {len(events)} upcoming event(s) on the Matex homepage", file=sys.stderr)
+
+    matex_user, matex_pass = env.get("MATEX_USER_ID"), env.get("MATEX_PASSWORD")
+    events: list[dict] = []
+    if matex_user and matex_pass:
+        print("Signing in to Matex for per-lot detail...", file=sys.stderr)
+        auctions, login_ok = matex_core.scan_authenticated(matex_user, matex_pass)
+        if login_ok:
+            events = build_events_from_authenticated(auctions)
+            with_items = sum(1 for a in auctions if a.get("items"))
+            print(
+                f"  signed in -- {len(auctions)} auction(s), {with_items} with a per-lot "
+                f"breakdown ({len(events)} total lot rows)",
+                file=sys.stderr,
+            )
+        else:
+            print("  login failed -- falling back to public-only scan", file=sys.stderr)
+
+    if not events:
+        print("Scanning Matex (public) and syncing to Supabase...", file=sys.stderr)
+        public_events = matex_core.scan()
+        print(f"  found {len(public_events)} upcoming event(s) on the Matex homepage", file=sys.stderr)
+        events = build_events_from_public(public_events)
 
     existing = fetch_existing_matex_lots(base_url, headers)
     now_iso = datetime.now(timezone.utc).isoformat()
