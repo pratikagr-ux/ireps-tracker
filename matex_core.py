@@ -163,13 +163,24 @@ def _matex_password_hash(password: str) -> str:
     return hashlib.md5((first + "").encode("utf-8")).hexdigest()
 
 
+# The login box's CheckValidity() JS sets this literal (static, baked
+# into the inline script, not session-random) into HiddenField1 right
+# before submit, alongside hashing the password -- without it, the
+# server silently bounces the postback back to the plain homepage
+# instead of logging in. Parsed from the page each time rather than
+# hardcoded, in case a future deploy changes it.
+HIDDEN_FIELD1_RE = re.compile(
+    r"document\.getElementById\(['\"]HiddenField1['\"]\)\.value\s*=\s*['\"]([^'\"]*)['\"]"
+)
+
+
 def login(session: requests.Session, user_id: str, password: str) -> bool:
     """Sign in to the Matex bidder portal, mutating `session`'s cookies.
     Replays the Index.aspx ASP.NET WebForms login postback (the page's one
     <form> covers several unrelated widgets -- newsletter, enquiry,
     account-revoke -- so only the viewstate/validation hidden fields plus
-    the login-specific UserId/UserPassword/imgSubmit are sent). Returns
-    whether the response looks signed-in."""
+    the login-specific UserId/UserPassword/imgSubmit/HiddenField1 are
+    sent). Returns whether the response looks signed-in."""
     resp = call_with_retry(session.get, LOGIN_PAGE_URL, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "lxml")
@@ -184,6 +195,9 @@ def login(session: requests.Session, user_id: str, password: str) -> bool:
     data["UserId"] = user_id
     data["UserPassword"] = _matex_password_hash(password)
     data["imgSubmit"] = "Go"
+    hf1 = HIDDEN_FIELD1_RE.search(resp.text)
+    if hf1:
+        data["HiddenField1"] = hf1.group(1)
     action = urljoin(LOGIN_PAGE_URL, form.get("action") or LOGIN_PAGE_URL)
     resp2 = call_with_retry(session.post, action, data=data, headers=HEADERS, timeout=30)
     resp2.raise_for_status()
