@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sys
 from urllib.parse import urljoin
 
 import requests
@@ -174,7 +175,18 @@ def login(session: requests.Session, user_id: str, password: str) -> bool:
     action = urljoin(LOGIN_PAGE_URL, form.get("action") or LOGIN_PAGE_URL)
     resp2 = call_with_retry(session.post, action, data=data, headers=HEADERS, timeout=30)
     resp2.raise_for_status()
-    return "Welcome :" in resp2.text
+    ok = "Welcome :" in resp2.text
+    if not ok:
+        # Diagnostic only -- never includes `data` (which holds the
+        # password), just a peek at what page came back, to tell a bad
+        # form replay apart from a wrong-credentials/bot-check response.
+        snippet = re.sub(r"\s+", " ", resp2.text).strip()[:400]
+        print(
+            f"  [matex login] no 'Welcome :' in response -- status={resp2.status_code} "
+            f"final_url={resp2.url} snippet={snippet!r}",
+            file=sys.stderr,
+        )
+    return ok
 
 
 def parse_authenticated_listing(html: str) -> list[dict]:
