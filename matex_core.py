@@ -151,6 +151,18 @@ def scan() -> list[dict]:
     return parse_events(resp.text)
 
 
+def _matex_password_hash(password: str) -> str:
+    """Matches the client-side JS the login box runs before submit
+    (js/MD5Conversion.js): `MD5(MD5(password).toUpperCase() + rId)` with
+    rId == '' for this particular login box (there's a second, unrelated
+    modal login on the same page that salts differently). The real
+    password is never sent to the server at all -- confirmed by computing
+    this in both a live browser and Python for a throwaway test string
+    and diffing the output byte for byte."""
+    first = hashlib.md5(password.encode("utf-8")).hexdigest().upper()
+    return hashlib.md5((first + "").encode("utf-8")).hexdigest()
+
+
 def login(session: requests.Session, user_id: str, password: str) -> bool:
     """Sign in to the Matex bidder portal, mutating `session`'s cookies.
     Replays the Index.aspx ASP.NET WebForms login postback (the page's one
@@ -170,7 +182,7 @@ def login(session: requests.Session, user_id: str, password: str) -> bool:
         if inp.get("name")
     }
     data["UserId"] = user_id
-    data["UserPassword"] = password
+    data["UserPassword"] = _matex_password_hash(password)
     data["imgSubmit"] = "Go"
     action = urljoin(LOGIN_PAGE_URL, form.get("action") or LOGIN_PAGE_URL)
     resp2 = call_with_retry(session.post, action, data=data, headers=HEADERS, timeout=30)
