@@ -271,6 +271,29 @@ def mark_expired(base_url: str, headers: dict, lot_nos: list[str]) -> None:
             resp.raise_for_status()
 
 
+def push_scan_summary(base_url: str, headers: dict, started_at: str, finished_at: str, summary: dict) -> None:
+    """Record this import's own `scans` row (source='MSTC'), same shape as
+    autoscan.py/matex_autoscan.py -- so the app's dashboard can show a
+    "last scanned" line for MSTC too, even though (unlike those two) this
+    is a manual, partial import rather than a full daily crawl."""
+    payload = {
+        "source": "MSTC",
+        "started_at": started_at,
+        "finished_at": finished_at,
+        "total_lots": summary["total_lots"],
+        "new_count": summary["new_count"],
+        "updated_count": summary["updated_count"],
+        "expired_count": summary["expired_count"],
+    }
+    resp = call_with_retry(
+        requests.post,
+        f"{base_url}/rest/v1/scans", headers={**headers, "Prefer": "return=minimal"}, json=payload, timeout=30
+    )
+    if resp.status_code >= 300:
+        print(f"  ERROR pushing scan summary: {resp.status_code} {resp.text[:500]}", file=sys.stderr)
+        resp.raise_for_status()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("rows_file")
@@ -288,6 +311,7 @@ def main():
     base_url = env["SUPABASE_URL"].rstrip("/")
     headers = rest_headers(env["SUPABASE_SERVICE_ROLE_KEY"])
 
+    started_at = datetime.now(timezone.utc).isoformat()
     existing = fetch_existing_mstc_lots(base_url, headers)
     now = datetime.now()
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -367,6 +391,15 @@ def main():
     if stale:
         mark_expired(base_url, headers, stale)
     print(f"Expired {len(stale)} previously-imported MSTC lot(s) whose date has passed.", file=sys.stderr)
+
+    finished_at = datetime.now(timezone.utc).isoformat()
+    summary = {
+        "total_lots": len(payload),
+        "new_count": tally.get("new", 0),
+        "updated_count": tally.get("updated", 0),
+        "expired_count": tally.get("expired", 0) + len(stale),
+    }
+    push_scan_summary(base_url, headers, started_at, finished_at, summary)
 
 
 if __name__ == "__main__":

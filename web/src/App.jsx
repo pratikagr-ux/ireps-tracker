@@ -5,12 +5,12 @@
 // locally-generated PDF catalogue per lot. Scanning itself stays a local,
 // manually-triggered Python step (see ../push_to_supabase.py) — this app
 // only reads/writes Supabase.
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from './supabaseClient.js';
 import * as DB from './dataClient.js';
-import { describeLocation, decipherCustodian, CITY_CODES } from './codes.js';
+import { describeLocation, describeRailway, decipherCustodian, CITY_CODES } from './codes.js';
 import { daysToAuction, formatDaysTo } from './dates.js';
 import './App.css';
 
@@ -112,6 +112,31 @@ function custodianLocation(row) {
   if (loc) return detail.State ? `${loc} (${detail.State})` : loc;
   if (!row.railway) return '';
   return describeLocation(row.railway, row.depot);
+}
+
+// Which of the user's saved keywords this lot actually matches -- the same
+// material_descr/category ilike check dataClient.js's fetchKeywordMatches
+// does server-side, replicated client-side so every table that lists lots
+// (not just the dedicated keyword-match views) can show which keyword(s)
+// are why a row might be of interest, right under its material description.
+function matchingKeywordsFor(row, keywordList) {
+  if (!keywordList || !keywordList.length) return [];
+  const text = `${row.material_descr || ''} ${row.category || ''}`.toLowerCase();
+  return keywordList.filter(k => text.includes(k.keyword.toLowerCase()));
+}
+
+function KeywordMatchChips({ row, keywords }) {
+  const matches = matchingKeywordsFor(row, keywords);
+  if (!matches.length) return null;
+  return (
+    <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap', marginTop: 3 }}>
+      {matches.map(k => (
+        <span key={k.id} style={{ fontSize: 9.5, fontWeight: 700, padding: '0px 6px', borderRadius: 999, background: `${C.amber}1a`, color: C.amber, whiteSpace: 'nowrap' }}>
+          {k.keyword}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 // The field/value pairs to show for a lot's detail view (modal/print/PDF).
@@ -1159,7 +1184,10 @@ export default function App() {
   const [bookmarks, setBookmarks] = useState([]);
   const [bookmarkedSet, setBookmarkedSet] = useState(new Set());
   const [categoryCounts, setCategoryCounts] = useState({});
+  const [sourceCounts, setSourceCounts] = useState({});
+  const [statusCounts, setStatusCounts] = useState({});
   const [latestScan, setLatestScan] = useState(null);
+  const [latestScans, setLatestScans] = useState({});
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
   const [status, setStatus] = useState('active');
@@ -1180,6 +1208,15 @@ export default function App() {
   const [keywords, setKeywords] = useState([]);
   const [keywordMatches, setKeywordMatches] = useState([]);
   const [newKeyword, setNewKeyword] = useState('');
+  const [showInlineKeywordAdd, setShowInlineKeywordAdd] = useState(false);
+  const [draggedKeywordId, setDraggedKeywordId] = useState(null);
+  // onDrop needs the id that was actually being dragged *right now* --
+  // state updated in onDragStart isn't guaranteed to have committed to a
+  // new render (and thus a fresh onDrop closure) by the time drop fires, so
+  // the payload itself is tracked in a ref (always current, no re-render
+  // needed) while `draggedKeywordId` state stays purely for the dimmed
+  // "being dragged" visual feedback.
+  const draggedKeywordIdRef = useRef(null);
   const [detailLot, setDetailLot] = useState(null);
   const [editWatchRow, setEditWatchRow] = useState(null);
   const [externalLots, setExternalLots] = useState([]);
@@ -1372,17 +1409,29 @@ export default function App() {
   const loadLots = useCallback(async () => {
     setLoading(true); setErr('');
     try {
-      const [rows, counts, bmSet] = await Promise.all([
-        DB.fetchLots({
-          search, category, changeTag, status, sources: [...sourceFilters],
-          anyKeywords: [...selectedKeywordTabs],
-        }),
+      const filterArgs = { search, category, changeTag, anyKeywords: [...selectedKeywordTabs] };
+      const [rows, counts, bmSet, srcCounts, stCounts] = await Promise.all([
+        DB.fetchLots({ ...filterArgs, status, sources: [...sourceFilters] }),
         DB.fetchCategoryCounts([...sourceFilters]),
         DB.fetchBookmarkedLotNos(),
+        DB.fetchSourceCounts({ ...filterArgs, status }),
+        DB.fetchStatusCounts({ ...filterArgs, sources: [...sourceFilters] }),
       ]);
-      setLots(rows.map(r => ({ ...r, location: custodianLocation(r) })));
+      // The scan that marks a lot expired runs once a day -- in the hours
+      // between an auction's own date/time passing and that next run, it's
+      // still status='active' in the DB. Rather than show it as "active"
+      // with a date in the past, drop it from the Active view client-side
+      // (statusCounts' own "active" count is the cheaper, un-corrected
+      // server count, so it can run a little ahead of what's actually shown
+      // here -- see the comment on fetchStatusCounts).
+      const corrected = status === 'active'
+        ? rows.filter(r => { const d = daysToAuction(r.next_auction); return d === null || d >= 0; })
+        : rows;
+      setLots(corrected.map(r => ({ ...r, location: custodianLocation(r) })));
       setCategoryCounts(counts);
       setBookmarkedSet(bmSet);
+      setSourceCounts(srcCounts);
+      setStatusCounts(stCounts);
     } catch (e) {
       setErr(e.message || String(e));
     } finally {
@@ -1478,6 +1527,7 @@ export default function App() {
       loadLiftedMaterial();
       loadSaleOrders();
       DB.fetchLatestScan().then(setLatestScan).catch(() => {});
+      DB.fetchLatestScans().then(setLatestScans).catch(() => {});
     }
   }, [session, loadBookmarks, loadKeywords, loadExternalLots, loadAwardedLots, loadLiftedMaterial, loadSaleOrders]);
 
@@ -1599,6 +1649,7 @@ export default function App() {
   const addKeywordDirect = async (kw) => {
     kw = kw.trim();
     if (!kw) return;
+    kw = kw.charAt(0).toUpperCase() + kw.slice(1);
     try {
       await DB.addKeyword(kw);
       await loadKeywords();
@@ -1619,6 +1670,28 @@ export default function App() {
       await loadKeywords();
     } catch (e) {
       setErr(e.message || String(e));
+    }
+  };
+
+  // Drag-and-drop reorder of the saved-keywords chip row: reorders local
+  // state immediately (so the drag feels responsive) and persists the new
+  // order in the background. Keyword Watch and the Lots tab's own keyword
+  // filter chips both render from this same `keywords` state, so a reorder
+  // here is reflected in both without any extra wiring.
+  const reorderKeywordsTo = async (draggedId, targetId) => {
+    if (draggedId === targetId) return;
+    const current = [...keywords];
+    const fromIdx = current.findIndex(k => k.id === draggedId);
+    const toIdx = current.findIndex(k => k.id === targetId);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = current.splice(fromIdx, 1);
+    current.splice(toIdx, 0, moved);
+    setKeywords(current);
+    try {
+      await DB.reorderKeywords(current.map(k => k.id));
+    } catch (e) {
+      setErr(e.message || String(e));
+      await loadKeywords();
     }
   };
 
@@ -1699,6 +1772,31 @@ export default function App() {
         </nav>
         <div className="app-content" style={{ padding: 20, flex: 1, minWidth: 0 }}>
       {activeTab === 'dashboard' && (<>
+        <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>Scan status by source</h2>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 26 }}>
+          {['IREPS', 'Matex', 'MSTC'].map(src => {
+            const s = latestScans[src];
+            return (
+              <div key={src} style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', padding: '12px 16px', minWidth: 200, flex: '1 1 200px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <SourceBadge source={src} />
+                  <span style={{ fontSize: 11, color: C.sub }}>{s ? new Date(s.finished_at).toLocaleString() : 'No scan data yet'}</span>
+                </div>
+                {s && (<>
+                  <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 3 }}>{s.total_lots} lots</div>
+                  <div style={{ fontSize: 11.5 }}>
+                    <span style={{ color: C.green, fontWeight: 600 }}>{s.new_count} new</span>
+                    {', '}
+                    <span style={{ color: C.amber, fontWeight: 600 }}>{s.updated_count} updated</span>
+                    {', '}
+                    <span style={{ color: C.red, fontWeight: 600 }}>{s.expired_count} expired</span>
+                  </div>
+                </>)}
+              </div>
+            );
+          })}
+        </div>
+
         <h2 style={{ fontSize: 15, margin: '0 0 10px' }}>New lots matching your keywords</h2>
         <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Found in the most recent scan — from your saved keywords on the Keyword Watch tab.</div>
         <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, boxShadow: '0 1px 3px rgba(15,23,42,0.05)', overflow: 'auto', marginBottom: 26 }}>
@@ -1706,7 +1804,7 @@ export default function App() {
             <thead><FullLotColumnsHeader /></thead>
             <tbody>
               {newKeywordMatches.map(row => (
-                <FullLotRow key={row.lot_no} row={row} onDetails={() => setDetailLot(row)} />
+                <FullLotRow key={row.lot_no} row={row} onDetails={() => setDetailLot(row)} keywords={keywords} />
               ))}
               {!newKeywordMatches.length && <tr><td colSpan={10} style={{ ...td, whiteSpace: 'normal', textAlign: 'center', color: C.sub }}>No new lots from the last scan match your saved keywords.</td></tr>}
             </tbody>
@@ -1720,7 +1818,7 @@ export default function App() {
             <thead><FullLotColumnsHeader /></thead>
             <tbody>
               {upcomingKeywordMatches.map(row => (
-                <FullLotRow key={row.lot_no} row={row} onDetails={() => setDetailLot(row)} />
+                <FullLotRow key={row.lot_no} row={row} onDetails={() => setDetailLot(row)} keywords={keywords} />
               ))}
               {!upcomingKeywordMatches.length && <tr><td colSpan={10} style={{ ...td, whiteSpace: 'normal', textAlign: 'center', color: C.sub }}>No keyword matches auctioning in the next 7 days.</td></tr>}
             </tbody>
@@ -1744,7 +1842,10 @@ export default function App() {
                   <tr key={item.key} style={{ borderTop: `1px solid ${C.bdr}` }}>
                     <td style={td}><SourceBadge source={item.source} /></td>
                     <td style={td} title={item.lot_no}>{item.lot_no}</td>
-                    <td style={td} title={item.material_descr}>{item.material_descr}</td>
+                    <td style={{ ...td, whiteSpace: 'normal' }}>
+                      {item.material_descr}
+                      <KeywordMatchChips row={{ material_descr: item.material_descr, category: item.row.category }} keywords={keywords} />
+                    </td>
                     <td style={{ ...td, whiteSpace: 'normal' }}>
                       <div style={{ fontWeight: 700 }}>{item.when}</div>
                       <div style={{ display: 'flex', gap: 5, alignItems: 'center', marginTop: 2, flexWrap: 'wrap' }}>
@@ -1837,7 +1938,16 @@ export default function App() {
             const total = Object.values(bySource).reduce((a, b) => a + b, 0);
             const breakdown = Object.entries(bySource).map(([s, n]) => `${s} ${n}`).join(' · ');
             return (
-              <span key={k.id} title={breakdown || 'No matches yet'} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, padding: '4px 6px 4px 10px', borderRadius: 999, background: `${C.blue}1a`, color: C.blue }}>
+              <span key={k.id} draggable title={breakdown || 'No matches yet'}
+                onDragStart={() => { draggedKeywordIdRef.current = k.id; setDraggedKeywordId(k.id); }}
+                onDragOver={e => e.preventDefault()}
+                onDrop={e => { e.preventDefault(); reorderKeywordsTo(draggedKeywordIdRef.current, k.id); draggedKeywordIdRef.current = null; setDraggedKeywordId(null); }}
+                onDragEnd={() => { draggedKeywordIdRef.current = null; setDraggedKeywordId(null); }}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, padding: '4px 6px 4px 8px', borderRadius: 999,
+                  background: `${C.blue}1a`, color: C.blue, cursor: 'grab', opacity: draggedKeywordId === k.id ? 0.4 : 1,
+                }}>
+                <span style={{ color: C.sub, fontSize: 10 }}>⠿</span>
                 {k.keyword}
                 <span style={{ fontSize: 10.5, fontWeight: 700, color: '#fff', background: C.blue, borderRadius: 999, padding: '1px 6px' }}>{total}</span>
                 <button type="button" onClick={() => removeKeyword(k.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.blue, fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
@@ -1850,7 +1960,7 @@ export default function App() {
         </form>
         {keywords.length > 0 && (
           <div style={{ fontSize: 11, color: C.sub, marginBottom: 16 }}>
-            Hover a keyword for its per-source breakdown (the badge is the total across all sources).
+            Hover a keyword for its per-source breakdown (the badge is the total across all sources). Drag a keyword (⠿) to reorder.
           </div>
         )}
 
@@ -1864,7 +1974,7 @@ export default function App() {
               <thead><FullLotColumnsHeader /></thead>
               <tbody>
                 {keywordMatches.map(row => (
-                  <FullLotRow key={row.lot_no} row={row} onDetails={() => setDetailLot(row)} />
+                  <FullLotRow key={row.lot_no} row={row} onDetails={() => setDetailLot(row)} keywords={keywords} />
                 ))}
                 {!keywordMatches.length && <tr><td colSpan={10} style={{ ...td, whiteSpace: 'normal', textAlign: 'center', color: C.sub }}>No active lots match your keywords yet.</td></tr>}
               </tbody>
@@ -1874,10 +1984,14 @@ export default function App() {
       </>)}
 
       {activeTab === 'lots' && (<>
-        {/* Layer 1: Source -- multi-select; "All sources" clears the set */}
+        {/* Layer 1: Source -- multi-select; "All sources" clears the set.
+            Counts reflect the current search/category/status/keyword
+            filters but never sourceFilters itself, so each chip reads "how
+            many lots would show if I picked this one". */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
           {[{ id: '', label: 'All sources' }, { id: 'IREPS', label: 'IREPS' }, { id: 'Matex', label: 'Matex' }, { id: 'MSTC', label: 'MSTC' }].map(s => {
             const active = s.id === '' ? sourceFilters.size === 0 : sourceFilters.has(s.id);
+            const count = s.id === '' ? Object.values(sourceCounts).reduce((a, b) => a + b, 0) : sourceCounts[s.id];
             return (
               <button key={s.id || 'all'} onClick={() => {
                 if (s.id === '') setSourceFilters(new Set()); else toggleInSet(setSourceFilters, s.id);
@@ -1889,7 +2003,7 @@ export default function App() {
                   background: active ? C.blue : '#fff',
                   color: active ? '#fff' : C.txt,
                 }}>
-                {s.label}
+                {s.label}{count !== undefined ? ` (${count})` : ''}
               </button>
             );
           })}
@@ -1897,10 +2011,14 @@ export default function App() {
 
         {/* Layer 2: Keyword -- multi-select, independent of the free-text
             search box below (the two combine with AND: e.g. search
-            "sambalpur" + keyword tab "60kg" narrows to lots matching both). */}
-        {keywords.length > 0 && (
-          <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>Keyword:</span>
+            "sambalpur" + keyword tab "60kg" narrows to lots matching both).
+            The row itself (and its "+") always shows, even with zero saved
+            keywords yet, so adding your first one doesn't require a trip to
+            Keyword Watch; the "All"/"All Keywords"/per-keyword chips only
+            make sense once at least one keyword exists. */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: C.sub, fontWeight: 600 }}>Keyword:</span>
+          {keywords.length > 0 && <>
             <button onClick={() => setSelectedKeywordTabs(new Set())}
               style={{
                 padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
@@ -1921,6 +2039,8 @@ export default function App() {
             </button>
             {keywords.map(k => {
               const isActive = selectedKeywordTabs.has(k.keyword);
+              const bySource = keywordSourceCounts[k.keyword] || {};
+              const total = Object.values(bySource).reduce((a, b) => a + b, 0);
               return (
                 <button key={k.id} onClick={() => toggleInSet(setSelectedKeywordTabs, k.keyword)}
                   style={{
@@ -1929,10 +2049,34 @@ export default function App() {
                     background: isActive ? `${C.amber}1a` : '#fff',
                     color: isActive ? C.amber : C.txt,
                   }}>
-                  {k.keyword}
+                  {k.keyword} ({total})
                 </button>
               );
             })}
+          </>}
+          <button type="button" onClick={() => setShowInlineKeywordAdd(o => !o)}
+            title="Add a new keyword without leaving Lots"
+            style={{
+              padding: '5px 10px', borderRadius: 999, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+              border: `1px dashed ${C.blue}`, background: '#fff', color: C.blue, lineHeight: 1,
+            }}>
+            +
+          </button>
+        </div>
+
+        {/* Inline "add a keyword" panel -- same suggestion engine as
+            Keyword Watch, opened in place so adding a keyword doesn't
+            require switching tabs and losing your current filters. */}
+        {showInlineKeywordAdd && (
+          <div style={{ background: C.surf, borderRadius: 10, border: `1px solid ${C.bdr}`, padding: 14, marginBottom: 14 }}>
+            <form onSubmit={addKeyword} style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              <input value={newKeyword} onChange={e => setNewKeyword(e.target.value)} placeholder="Add a keyword to watch…" autoFocus
+                style={{ flex: 1, maxWidth: 280, padding: '6px 10px', borderRadius: 6, border: `1px solid ${C.bdr}`, fontSize: 12.5 }} />
+              <button type="submit" style={smallBtn}>Add</button>
+              <button type="button" onClick={() => setShowInlineKeywordAdd(false)} style={smallBtn}>Close</button>
+            </form>
+            <KeywordSuggestions existingKeywords={keywords} onAdd={addKeywordDirect}
+              summary={materialSummary} loading={summaryLoading} err={summaryErr} onLoad={loadMaterialSummary} />
           </div>
         )}
 
@@ -1954,16 +2098,20 @@ export default function App() {
                 }}>
                 All ({lots.length})
               </button>
-              {divisions.map(([name, count]) => (
-                <button key={name} onClick={() => { toggleInSet(setDivisionFilters, name); setSubDivisionFilters(new Set()); }}
-                  style={{
-                    padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                    border: `1px solid ${divisionFilters.has(name) ? C.green : C.bdr}`,
-                    background: divisionFilters.has(name) ? `${C.green}1a` : '#fff', color: divisionFilters.has(name) ? C.green : C.txt,
-                  }}>
-                  {name} ({count})
-                </button>
-              ))}
+              {divisions.map(([name, count]) => {
+                const fullName = describeRailway(name);
+                return (
+                  <button key={name} onClick={() => { toggleInSet(setDivisionFilters, name); setSubDivisionFilters(new Set()); }}
+                    title={fullName !== name ? fullName : undefined}
+                    style={{
+                      padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                      border: `1px solid ${divisionFilters.has(name) ? C.green : C.bdr}`,
+                      background: divisionFilters.has(name) ? `${C.green}1a` : '#fff', color: divisionFilters.has(name) ? C.green : C.txt,
+                    }}>
+                    {name} ({count})
+                  </button>
+                );
+              })}
             </div>
           );
         })()}
@@ -2001,11 +2149,22 @@ export default function App() {
             <option value="">All categories</option>
             {Object.keys(categoryCounts).map(c => <option key={c} value={c}>{c} ({categoryCounts[c]})</option>)}
           </select>
-          <select value={status} onChange={e => setStatus(e.target.value)} style={{ padding: '8px 10px', borderRadius: 6, border: `1px solid ${C.bdr}`, fontSize: 13 }}>
-            <option value="active">Active</option>
-            <option value="expired">Expired</option>
-            <option value="">All</option>
-          </select>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[{ id: 'active', label: 'Active' }, { id: 'expired', label: 'Expired' }, { id: '', label: 'All' }].map(s => {
+              const active = status === s.id;
+              const count = s.id === '' ? (statusCounts.active || 0) + (statusCounts.expired || 0) : statusCounts[s.id];
+              return (
+                <button key={s.id || 'all-status'} onClick={() => setStatus(s.id)}
+                  style={{
+                    padding: '8px 12px', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                    border: `1px solid ${active ? C.blue : C.bdr}`,
+                    background: active ? C.blue : '#fff', color: active ? '#fff' : C.txt,
+                  }}>
+                  {s.label}{count !== undefined ? ` (${count})` : ''}
+                </button>
+              );
+            })}
+          </div>
           <select value={changeTag} onChange={e => setChangeTag(e.target.value)} style={{ padding: '8px 10px', borderRadius: 6, border: `1px solid ${C.bdr}`, fontSize: 13 }}>
             <option value="">Any change</option>
             <option value="new">New</option>
@@ -2056,11 +2215,16 @@ export default function App() {
                   {sourceColumns.some(c => c.id === 'source') && visibleCols.source && <td style={td}><SourceBadge source={row.source} /></td>}
                   {sourceColumns.some(c => c.id === 'railway') && visibleCols.railway && <td style={td}>{row.railway}</td>}
                   {sourceColumns.some(c => c.id === 'depot') && visibleCols.depot && <td style={td}>{row.depot}</td>}
-                  {visibleCols.location && <td style={td} title={row.change_tag === 'updated' ? changeTooltip(row) : undefined}>{row.location}</td>}
+                  {visibleCols.location && <td style={{ ...td, whiteSpace: 'normal' }} title={row.change_tag === 'updated' ? changeTooltip(row) : undefined}>{row.location}</td>}
                   <td style={td} title={row.lot_no}>{row.lot_no}</td>
                   {visibleCols.qty_unit && <td style={td}>{row.qty_unit}</td>}
                   {visibleCols.category && <td style={td} title={row.category}>{row.category}</td>}
-                  {visibleCols.material_descr && <td style={td} title={row.material_descr}>{row.material_descr}</td>}
+                  {visibleCols.material_descr && (
+                    <td style={{ ...td, whiteSpace: 'normal' }}>
+                      {row.material_descr}
+                      <KeywordMatchChips row={row} keywords={keywords} />
+                    </td>
+                  )}
                   {visibleCols.next_auction && <NextAuctionCell row={row} />}
                   {visibleCols.tag && (
                     <td style={td}>
@@ -2117,7 +2281,7 @@ export default function App() {
                 <WatchlistRow key={row.lot_no} row={row}
                   selected={selectedWatch.has(row.lot_no)}
                   onToggleSelect={() => setSelectedWatch(s => { const n = new Set(s); n.has(row.lot_no) ? n.delete(row.lot_no) : n.add(row.lot_no); return n; })}
-                  onRemove={() => toggleBookmark(row.lot_no)} onDetails={() => setDetailLot(row)} onEdit={() => setEditWatchRow(row)}
+                  onRemove={() => toggleBookmark(row.lot_no)} onDetails={() => setDetailLot(row)} onEdit={() => setEditWatchRow(row)} keywords={keywords}
                   onAward={() => setEditAward({ source: 'IREPS', lot_no: row.lot_no, title: row.material_descr, location: row.location, category: row.category, qty_unit: row.qty_unit, sold_rate: row.sold_rate })} />
               ))}
               {!bookmarks.length && <tr><td colSpan={15} style={{ ...td, textAlign: 'center', color: C.sub }}>Nothing on your watchlist yet — star a lot above.</td></tr>}
@@ -2349,7 +2513,7 @@ function ExternalLotRow({ row, onRemove, onEdit, onAward }) {
   );
 }
 
-function WatchlistRow({ row, selected, onToggleSelect, onRemove, onDetails, onEdit, onAward }) {
+function WatchlistRow({ row, selected, onToggleSelect, onRemove, onDetails, onEdit, onAward, keywords }) {
   const cost = landingCost(row);
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
@@ -2358,10 +2522,13 @@ function WatchlistRow({ row, selected, onToggleSelect, onRemove, onDetails, onEd
       <td style={td}>{row.railway}</td>
       <td style={td}>{row.depot}</td>
       <td style={td}>{row.lot_no}</td>
-      <td style={td}>{row.location}</td>
+      <td style={{ ...td, whiteSpace: 'normal' }}>{row.location}</td>
       <td style={td}>{row.qty_unit}</td>
       <td style={td}>{row.category}</td>
-      <td style={{ ...clipTd, maxWidth: 240 }} title={row.material_descr}>{row.material_descr}</td>
+      <td style={{ ...td, whiteSpace: 'normal', maxWidth: 240 }}>
+        {row.material_descr}
+        <KeywordMatchChips row={row} keywords={keywords} />
+      </td>
       <NextAuctionCell row={row} />
       <td style={td}><Badge text={row.watch_status || 'watching'} color={WATCH_STATUS_COLOR[row.watch_status] || C.sub} /></td>
       <td style={td}>{row.team || '-'}</td>
@@ -2461,17 +2628,20 @@ function FullLotColumnsHeader() {
   );
 }
 
-function FullLotRow({ row, onDetails }) {
+function FullLotRow({ row, onDetails, keywords }) {
   return (
     <tr style={{ borderTop: `1px solid ${C.bdr}` }}>
       <td style={td}><SourceBadge source={row.source} /></td>
       <td style={td}>{row.railway}</td>
       <td style={td}>{row.depot}</td>
-      <td style={td} title={row.location}>{row.location}</td>
+      <td style={{ ...td, whiteSpace: 'normal' }}>{row.location}</td>
       <td style={td} title={row.lot_no}>{row.lot_no}</td>
       <td style={td}>{row.qty_unit}</td>
       <td style={td} title={row.category}>{row.category}</td>
-      <td style={td} title={row.material_descr}>{row.material_descr}</td>
+      <td style={{ ...td, whiteSpace: 'normal' }}>
+        {row.material_descr}
+        <KeywordMatchChips row={row} keywords={keywords} />
+      </td>
       <NextAuctionCell row={row} />
       <td style={{ ...td, whiteSpace: 'normal' }}><button onClick={onDetails} style={smallBtn}>Details</button></td>
     </tr>

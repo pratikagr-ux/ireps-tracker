@@ -248,6 +248,7 @@ def run_scan(base_url: str, headers: dict, rail_unit: str, depot_id: str, max_pa
 
 def push_scan_summary(base_url: str, headers: dict, started_at: str, finished_at: str, summary: dict) -> None:
     payload = {
+        "source": "IREPS",
         "started_at": started_at,
         "finished_at": finished_at,
         "total_lots": summary["total_lots"],

@@ -270,6 +270,7 @@ def mark_expired(base_url: str, headers: dict, lot_nos: list[str]) -> None:
 
 def push_scan_summary(base_url: str, headers: dict, started_at: str, finished_at: str, summary: dict) -> None:
     payload = {
+        "source": "Matex",
         "started_at": started_at,
         "finished_at": finished_at,
         "total_lots": summary["total_lots"],

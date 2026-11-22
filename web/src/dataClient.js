@@ -74,6 +74,62 @@ export async function fetchLots({ search = '', category = '', changeTag = '', st
   return data || [];
 }
 
+// Per-source lot counts under the Lots tab's current OTHER filters (status/
+// category/changeTag/search/keyword-tabs) -- deliberately ignores sourceFilters
+// itself, so each chip shows "how many lots would show if I picked this one",
+// not how many are in the currently-loaded (already source-filtered) set.
+// Three cheap HEAD (count-only, no rows) requests rather than one grouped
+// query, mirroring fetchKeywordSourceCount's existing pattern.
+export async function fetchSourceCounts({ search = '', category = '', changeTag = '', status = 'active', anyKeywords = [] } = {}) {
+  const esc = (s) => s.replace(/[%,]/g, '');
+  const sources = ['IREPS', 'Matex', 'MSTC'];
+  const counts = {};
+  await Promise.all(sources.map(async (src) => {
+    let q = supabase.from('lots').select('*', { count: 'exact', head: true }).eq('source', src);
+    q = excludeTestRailways(q);
+    if (status) q = q.eq('status', status);
+    if (category) q = q.eq('category', category);
+    if (changeTag) q = q.eq('change_tag', changeTag);
+    if (anyKeywords.length) q = q.or(anyKeywords.map(k => `material_descr.ilike.%${esc(k)}%,category.ilike.%${esc(k)}%`).join(','));
+    if (search.trim()) {
+      const terms = search.split(',').map(t => t.trim()).filter(Boolean);
+      for (const term of terms) q = q.or(`lot_no.ilike.%${esc(term)}%,material_descr.ilike.%${esc(term)}%,railway.ilike.%${esc(term)}%,depot.ilike.%${esc(term)}%`);
+    }
+    const { count, error } = await q;
+    if (!error) counts[src] = count || 0;
+  }));
+  return counts;
+}
+
+// Active vs expired lot counts under the Lots tab's current OTHER filters
+// (source/category/changeTag/search/keyword-tabs) -- ignores `status` itself,
+// for the same reason as fetchSourceCounts above. The "active" count is the
+// server's status='active' count, which can include a handful of lots whose
+// own auction date has in fact just passed (the next scan hasn't caught up
+// yet) -- the Lots tab's rendered list corrects for that client-side, so the
+// two can differ by a small amount; not worth a second full-table date-aware
+// query just to keep a label in sync with a list that's already correct.
+export async function fetchStatusCounts({ search = '', category = '', changeTag = '', sources = [], anyKeywords = [] } = {}) {
+  const esc = (s) => s.replace(/[%,]/g, '');
+  const statuses = ['active', 'expired'];
+  const counts = {};
+  await Promise.all(statuses.map(async (st) => {
+    let q = supabase.from('lots').select('*', { count: 'exact', head: true }).eq('status', st);
+    q = excludeTestRailways(q);
+    if (category) q = q.eq('category', category);
+    if (changeTag) q = q.eq('change_tag', changeTag);
+    if (sources.length) q = q.in('source', sources);
+    if (anyKeywords.length) q = q.or(anyKeywords.map(k => `material_descr.ilike.%${esc(k)}%,category.ilike.%${esc(k)}%`).join(','));
+    if (search.trim()) {
+      const terms = search.split(',').map(t => t.trim()).filter(Boolean);
+      for (const term of terms) q = q.or(`lot_no.ilike.%${esc(term)}%,material_descr.ilike.%${esc(term)}%,railway.ilike.%${esc(term)}%,depot.ilike.%${esc(term)}%`);
+    }
+    const { count, error } = await q;
+    if (!error) counts[st] = count || 0;
+  }));
+  return counts;
+}
+
 export async function fetchCategoryCounts(sources = []) {
   // The project's PostgREST max-rows setting caps any single response
   // (1000 by default), which silently under-counted categories once total
@@ -125,6 +181,21 @@ export async function fetchLatestScan() {
   return (data && data[0]) || null;
 }
 
+// Most recent scans row per source (IREPS/Matex/MSTC each push their own
+// row -- see autoscan.py/matex_autoscan.py/mstc_import.py). Rows from
+// before each script started tagging `source` have it as null and are
+// simply never the latest for any of these three, so they just drop out
+// once a source's first tagged row lands.
+export async function fetchLatestScans() {
+  const sources = ['IREPS', 'Matex', 'MSTC'];
+  const entries = await Promise.all(sources.map(async (src) => {
+    const { data, error } = await supabase.from('scans').select('*').eq('source', src).order('finished_at', { ascending: false }).limit(1);
+    if (error) throw error;
+    return [src, (data && data[0]) || null];
+  }));
+  return Object.fromEntries(entries);
+}
+
 // ── Bookmarks (per signed-in user, RLS-scoped) ──────────────────────────
 export async function fetchBookmarks() {
   const { data, error } = await supabase
@@ -167,7 +238,7 @@ export async function updateBookmark(lotNo, fields) {
 
 // ── Keywords (per signed-in user, RLS-scoped) ───────────────────────────
 export async function fetchKeywords() {
-  const { data, error } = await supabase.from('keywords').select('*').order('created_at', { ascending: true });
+  const { data, error } = await supabase.from('keywords').select('*').order('sort_order', { ascending: true, nullsFirst: false }).order('created_at', { ascending: true });
   if (error) throw error;
   return data || [];
 }
@@ -176,12 +247,32 @@ export async function addKeyword(keyword) {
   const { data: sessionData } = await supabase.auth.getSession();
   const userId = sessionData?.session?.user?.id;
   if (!userId) throw new Error('Not signed in');
-  const { error } = await supabase.from('keywords').insert({ user_id: userId, keyword });
+  // New keywords go to the end of the user's own drag order -- one extra
+  // read to find the current max, rather than a server-side default, since
+  // sort_order is scoped per-user and plain column defaults can't see that.
+  const { data: maxRow } = await supabase.from('keywords').select('sort_order').eq('user_id', userId).order('sort_order', { ascending: false, nullsFirst: false }).limit(1).maybeSingle();
+  const nextOrder = (maxRow?.sort_order ?? -1) + 1;
+  const { error } = await supabase.from('keywords').insert({ user_id: userId, keyword, sort_order: nextOrder });
   if (error) throw error;
 }
 
 export async function removeKeyword(id) {
   const { error } = await supabase.from('keywords').delete().eq('id', id);
+  if (error) throw error;
+}
+
+// Persists a drag-and-drop reorder: `orderedIds` is every one of the user's
+// keyword ids in their new display order. One update per row -- the list is
+// always small (a handful to a few dozen keywords), so this is simpler than
+// a bulk upsert/RPC for what's a rare, user-driven action.
+export async function reorderKeywords(orderedIds) {
+  const { error } = await (async () => {
+    for (let i = 0; i < orderedIds.length; i++) {
+      const { error: err } = await supabase.from('keywords').update({ sort_order: i }).eq('id', orderedIds[i]);
+      if (err) return { error: err };
+    }
+    return { error: null };
+  })();
   if (error) throw error;
 }
 
