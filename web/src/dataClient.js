@@ -42,11 +42,27 @@ function excludeTestRailways(q) {
 }
 
 // ── Lots ─────────────────────────────────────────────────────────────────
+// Everything a list view (the Lots table, FullLotRow, WatchlistRow, etc.)
+// actually reads -- deliberately NOT the full `detail` jsonb, which is the
+// whole scraped catalogue page and far bigger than anything else in the
+// row; pulling it for up to 500 rows on every load/keystroke is what blew
+// through this project's Supabase egress quota. The three `detail->>`
+// entries are the one part of it a list row does need -- custodianLocation
+// 's precise Location column -- so PostgREST extracts just those three
+// flat strings instead of the whole blob. Anything that needs the rest of
+// `detail` (the lot detail modal, Print, PDF) fetches it separately, once,
+// on demand -- see ensureDetail/fetchLotDetail.
+const LOT_LIST_COLUMNS = [
+  'lot_no', 'lot_id', 'source', 'railway', 'depot', 'qty_unit', 'category', 'min_incr',
+  'material_descr', 'next_auction', 'status', 'change_tag', 'change_detail', 'relist_count',
+  'custodian:detail->>Custodian', 'detail_location:detail->>Location', 'detail_state:detail->>State',
+].join(',');
+
 // Server-side filtering/search via PostgREST, mirroring webapp.py's /lots
 // route (search across lot_no/material_descr/railway/depot, category,
 // change_tag, status filters).
 export async function fetchLots({ search = '', category = '', changeTag = '', status = 'active', sources = [], anyKeywords = [], limit = 500 } = {}) {
-  let q = supabase.from('lots').select('*').order('publish_date', { ascending: false }).limit(limit);
+  let q = supabase.from('lots').select(LOT_LIST_COLUMNS).order('publish_date', { ascending: false }).limit(limit);
   q = excludeTestRailways(q);
   if (status) q = q.eq('status', status);
   if (category) q = q.eq('category', category);
@@ -175,6 +191,16 @@ export async function fetchLotsByNos(lotNos) {
   return data || [];
 }
 
+// The full `detail` jsonb for exactly one lot -- single row, single column,
+// used only once a lot is actually opened (detail modal, Print, PDF), never
+// as part of a list load. See LOT_LIST_COLUMNS above for why list views
+// don't carry this.
+export async function fetchLotDetail(lotNo) {
+  const { data, error } = await supabase.from('lots').select('detail').eq('lot_no', lotNo).maybeSingle();
+  if (error) throw error;
+  return data?.detail ?? null;
+}
+
 export async function fetchLatestScan() {
   const { data, error } = await supabase.from('scans').select('*').order('finished_at', { ascending: false }).limit(1);
   if (error) throw error;
@@ -281,7 +307,7 @@ export async function reorderKeywords(orderedIds) {
 // whether they've been starred yet.
 export async function fetchKeywordMatches(keywords) {
   if (!keywords.length) return [];
-  let q = supabase.from('lots').select('*').eq('status', 'active').order('next_auction', { ascending: true }).limit(500);
+  let q = supabase.from('lots').select(LOT_LIST_COLUMNS).eq('status', 'active').order('next_auction', { ascending: true }).limit(500);
   q = excludeTestRailways(q);
   const esc = (k) => k.replace(/[%,]/g, '');
   const orExpr = keywords.map(k => `material_descr.ilike.%${esc(k)}%,category.ilike.%${esc(k)}%`).join(',');

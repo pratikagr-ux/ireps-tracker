@@ -100,6 +100,15 @@ function landingCost(row) {
 // page itself (lots.detail.Location, synced by autoscan.py) -- much more
 // useful than our zone-level railway/depot guess, which is only a fallback
 // for lots whose catalogue detail hasn't been synced yet.
+//
+// List views (Lots table, keyword matches, etc.) fetch rows via
+// dataClient.js's trimmed `fetchLots`/`fetchKeywordMatches` selects, which
+// pull just these three flat sub-fields out of `detail` (custodian,
+// detail_location, detail_state) via PostgREST's `->>'` operator instead of
+// the whole jsonb blob -- a handful of bytes instead of the full catalogue
+// payload, repeated across up to 500 rows. A row with the FULL `detail`
+// object already loaded (e.g. after LotDetailModal's own lazy fetch) takes
+// precedence over the flat fields, which is then just a stale subset.
 function custodianLocation(row) {
   const detail = row.detail || {};
   // For IREPS, the catalogue's own "Custodian" field (e.g.
@@ -107,9 +116,11 @@ function custodianLocation(row) {
   // material -- show it deciphered rather than the free-text "Location"
   // field. Matex/MSTC have no such field, so they fall through unchanged.
   const isIreps = !row.source || row.source === 'IREPS';
-  if (isIreps && detail.Custodian) return decipherCustodian(detail.Custodian);
-  const loc = detail.Location;
-  if (loc) return detail.State ? `${loc} (${detail.State})` : loc;
+  const custodian = detail.Custodian ?? row.custodian;
+  if (isIreps && custodian) return decipherCustodian(custodian);
+  const loc = detail.Location ?? row.detail_location;
+  const state = detail.State ?? row.detail_state;
+  if (loc) return state ? `${loc} (${state})` : loc;
   if (!row.railway) return '';
   return describeLocation(row.railway, row.depot);
 }
@@ -232,8 +243,22 @@ function LoginScreen({ onSignedIn }) {
   );
 }
 
+// Lightweight list rows (dataClient.js's fetchLots/fetchKeywordMatches)
+// never carry the full `detail` jsonb -- just the flat sub-fields
+// custodianLocation needs -- so `row.detail` is `undefined` there (vs
+// `null`, meaning a full-select row whose catalogue detail genuinely
+// isn't synced yet). Anything that needs the full catalogue detail (the
+// modal, Print, PDF) fetches it here, once, on demand, instead of every
+// list row carrying the whole blob all the time.
+async function ensureDetail(row) {
+  if (row.detail !== undefined) return row;
+  const detail = await DB.fetchLotDetail(row.lot_no);
+  return { ...row, detail };
+}
+
 // ── PDF catalogue (client-side, mirrors the Python reportlab version) ───
-function downloadCataloguePdf(row) {
+async function downloadCataloguePdf(row) {
+  row = await ensureDetail(row);
   const doc = new jsPDF();
   doc.setFontSize(16);
   doc.text(`Lot Catalogue - Lot ${row.lot_no}`, 14, 18);
@@ -309,7 +334,8 @@ const WATCHLIST_PRINT_COLUMNS = [
   { header: 'Landing Cost', get: (r) => { const c = landingCost(r); return c === null ? '' : c.toFixed(2); } },
 ];
 
-function printLotDetail(row) {
+async function printLotDetail(row) {
+  row = await ensureDetail(row);
   const hasDetail = !!(row.detail && Object.keys(row.detail).length);
   const rowsHtml = buildDetailRows(row).map(([k, v]) => `<tr><td><b>${escapeHtml(k)}</b></td><td>${escapeHtml(v)}</td></tr>`).join('');
   const win = window.open('', '_blank');
@@ -328,10 +354,26 @@ function printLotDetail(row) {
 
 // ── Lot detail modal ────────────────────────────────────────────────────
 function LotDetailModal({ row, onClose }) {
+  const [fullRow, setFullRow] = useState(row);
+  // `row` only ever changes identity when a different lot's "Details" is
+  // clicked (see setDetailLot in App()), so this doesn't re-fire on
+  // unrelated re-renders -- just fetches the one thing this specific list
+  // row didn't carry (see ensureDetail above) the moment it's actually
+  // opened.
+  useEffect(() => {
+    setFullRow(row);
+    if (!row || row.detail !== undefined) return;
+    let cancelled = false;
+    DB.fetchLotDetail(row.lot_no).then(detail => {
+      if (!cancelled) setFullRow(r => (r && r.lot_no === row.lot_no ? { ...r, detail } : r));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [row]);
+
   if (!row) return null;
-  const rows = buildDetailRows(row);
-  const hasDetail = !!(row.detail && Object.keys(row.detail).length);
-  const link = sourceLink(row);
+  const rows = buildDetailRows(fullRow);
+  const hasDetail = !!(fullRow.detail && Object.keys(fullRow.detail).length);
+  const link = sourceLink(fullRow);
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
       <div onClick={e => e.stopPropagation()} style={{ background: C.surf, borderRadius: 10, width: 'min(560px, 94vw)', maxHeight: '85vh', overflow: 'auto', padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)' }}>
@@ -379,8 +421,8 @@ function LotDetailModal({ row, onClose }) {
           <a href={link.url} target="_blank" rel="noopener noreferrer" style={{ ...smallBtn, textDecoration: 'none', display: 'inline-block' }}>
             {link.label} ↗
           </a>
-          <button onClick={() => printLotDetail(row)} style={smallBtn}>Print</button>
-          <button onClick={() => downloadCataloguePdf(row)} style={smallBtn}>Download PDF</button>
+          <button onClick={() => printLotDetail(fullRow)} style={smallBtn}>Print</button>
+          <button onClick={() => downloadCataloguePdf(fullRow)} style={smallBtn}>Download PDF</button>
         </div>
       </div>
     </div>
@@ -1180,6 +1222,16 @@ function SaleOrderModal({ row, onSave, onClose }) {
 // ── Main app ─────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = checking, null = signed out
+  // Supabase re-emits a *new* session object (same user, just a refreshed
+  // token) on every tab focus and periodic auto-refresh, not just on
+  // actual sign-in/out. An effect that depends on `session` itself re-runs
+  // every one of those times -- this is the stable primitive to depend on
+  // instead, so sign-in/out is still detected (it's the only thing that
+  // actually changes this value) without refetching everything on every
+  // token refresh. Effects still read the richer `session` object in their
+  // body; by the time one re-runs from a real sessionUserId change, both
+  // were set together in the same render, so it's never stale.
+  const sessionUserId = session?.user?.id ?? null;
   const [lots, setLots] = useState([]);
   const [bookmarks, setBookmarks] = useState([]);
   const [bookmarkedSet, setBookmarkedSet] = useState(new Set());
@@ -1189,6 +1241,16 @@ export default function App() {
   const [latestScan, setLatestScan] = useState(null);
   const [latestScans, setLatestScans] = useState({});
   const [search, setSearch] = useState('');
+  // The search box itself binds to `search` (so typing feels instant), but
+  // loadLots depends on this debounced copy instead -- otherwise every
+  // keystroke re-fetches up to 500 rows plus the source/status HEAD counts,
+  // which was a meaningful share of what blew through this project's
+  // Supabase egress quota.
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 400);
+    return () => clearTimeout(t);
+  }, [search]);
   const [category, setCategory] = useState('');
   const [status, setStatus] = useState('active');
   // Layer 1-4 of the Lots tab's drill-down are all multi-select: each is a
@@ -1297,7 +1359,7 @@ export default function App() {
       if (!cancelled) setKeywordSourceCounts(Object.fromEntries(entries));
     })();
     return () => { cancelled = true; };
-  }, [session, keywords]);
+  }, [sessionUserId, keywords]);
 
   // Categories tab: every active lot's category, grouped into a top-level
   // category -> sub-category tree with counts, from the on-demand full
@@ -1409,10 +1471,9 @@ export default function App() {
   const loadLots = useCallback(async () => {
     setLoading(true); setErr('');
     try {
-      const filterArgs = { search, category, changeTag, anyKeywords: [...selectedKeywordTabs] };
-      const [rows, counts, bmSet, srcCounts, stCounts] = await Promise.all([
+      const filterArgs = { search: debouncedSearch, category, changeTag, anyKeywords: [...selectedKeywordTabs] };
+      const [rows, bmSet, srcCounts, stCounts] = await Promise.all([
         DB.fetchLots({ ...filterArgs, status, sources: [...sourceFilters] }),
-        DB.fetchCategoryCounts([...sourceFilters]),
         DB.fetchBookmarkedLotNos(),
         DB.fetchSourceCounts({ ...filterArgs, status }),
         DB.fetchStatusCounts({ ...filterArgs, sources: [...sourceFilters] }),
@@ -1428,7 +1489,6 @@ export default function App() {
         ? rows.filter(r => { const d = daysToAuction(r.next_auction); return d === null || d >= 0; })
         : rows;
       setLots(corrected.map(r => ({ ...r, location: custodianLocation(r) })));
-      setCategoryCounts(counts);
       setBookmarkedSet(bmSet);
       setSourceCounts(srcCounts);
       setStatusCounts(stCounts);
@@ -1437,7 +1497,16 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [search, category, changeTag, status, sourceFilters, selectedKeywordTabs]);
+  }, [debouncedSearch, category, changeTag, status, sourceFilters, selectedKeywordTabs]);
+
+  // Category counts only ever depend on `sourceFilters` (fetchCategoryCounts
+  // takes no other parameter) -- a separate effect so switching Source
+  // refreshes them, but search/category/changeTag/keyword changes (which
+  // all re-run loadLots) don't needlessly re-run this too.
+  useEffect(() => {
+    if (!session) return;
+    DB.fetchCategoryCounts([...sourceFilters]).then(setCategoryCounts).catch(e => setErr(e.message || String(e)));
+  }, [sessionUserId, sourceFilters]);
 
   // Reset the Division/Sub-Division drill-down the moment an upstream
   // filter changes (synchronously, in the same render) -- not from
@@ -1529,7 +1598,7 @@ export default function App() {
       DB.fetchLatestScan().then(setLatestScan).catch(() => {});
       DB.fetchLatestScans().then(setLatestScans).catch(() => {});
     }
-  }, [session, loadBookmarks, loadKeywords, loadExternalLots, loadAwardedLots, loadLiftedMaterial, loadSaleOrders]);
+  }, [sessionUserId, loadBookmarks, loadKeywords, loadExternalLots, loadAwardedLots, loadLiftedMaterial, loadSaleOrders]);
 
   // Lots tab: (re)load whenever the user signs in or actually changes a
   // filter -- loadLots's own useCallback deps are the real primitive
@@ -1537,14 +1606,14 @@ export default function App() {
   // on a genuine change.
   useEffect(() => {
     if (session) loadLots();
-  }, [session, loadLots]);
+  }, [sessionUserId, loadLots]);
 
   useEffect(() => {
     if (!session || !keywords.length) { setKeywordMatches([]); return; }
     DB.fetchKeywordMatches(keywords.map(k => k.keyword))
       .then(rows => setKeywordMatches(rows.map(r => ({ ...r, location: custodianLocation(r) }))))
       .catch(e => setErr(e.message || String(e)));
-  }, [session, keywords]);
+  }, [sessionUserId, keywords]);
 
   if (!supabase) {
     return <div style={{ padding: 40, fontFamily: 'sans-serif' }}>
